@@ -1,4 +1,4 @@
-import { NIGHT_ACTION_LIST, useGameStore } from '../../stores/useGameStore';
+import { useGameStore } from '../../stores/useGameStore';
 import { useUiStore } from '../../stores/useUiStore';
 import type { DayLog } from '../../types';
 import { num, signedYen } from '../../utils/format';
@@ -7,7 +7,7 @@ import { MessageWindow } from '../game/MessageWindow';
 import { PcWindow } from '../pc/PcWindow';
 import { RoomScene } from '../scenes/RoomScene';
 
-function summary(log: DayLog): string {
+function daySummary(log: DayLog): string {
   if (log.actionType === 'REST') return log.memo;
   const z = log.sigma > 0 ? (log.actualProfit - log.expectedValue) / log.sigma : 0;
   const flavor =
@@ -25,11 +25,11 @@ function summary(log: DayLog): string {
   ].join('\n');
 }
 
-/** 23:30 自室。収支を記帳して、夜の過ごし方を選ぶ */
-export function NightPhase() {
+/** 勝負日の夜（23:30 自室）。記帳して、週の残りをおまかせで過ごす */
+export function ShoubuNightPhase() {
   const player = useGameStore((s) => s.player);
   const log = useGameStore((s) => s.lastLog);
-  const nightAction = useGameStore((s) => s.nightAction);
+  const finishShoubu = useGameStore((s) => s.finishShoubu);
   const openPc = useUiStore((s) => s.openPc);
   if (!log) return null;
 
@@ -39,14 +39,9 @@ export function NightPhase() {
       <Hud clock={23 * 60 + 30} />
       <MessageWindow
         speaker="収支表.xls"
-        text={summary(log)}
+        text={daySummary(log)}
         choices={[
-          ...NIGHT_ACTION_LIST.map((a) => ({
-            label: a.label,
-            sub: `${a.cost > 0 ? `${a.cost}円 ` : ''}体${a.health >= 0 ? '+' : ''}${a.health} 精${a.mental >= 0 ? '+' : ''}${a.mental}`,
-            disabled: a.cost > player.cash,
-            onSelect: () => nightAction(a.id),
-          })),
+          { label: '週の残りを過ごす', sub: 'おまかせ稼働', onSelect: finishShoubu },
           { label: '収支表を見返す', onSelect: () => openPc('LEDGER') },
         ]}
       />

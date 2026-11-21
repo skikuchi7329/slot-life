@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getMachine } from '../../data/machines';
+import { counterFlags, getMachine } from '../../data/machines';
 import { getParlor } from '../../data/parlors';
 import { OPEN_TIME, useGameStore } from '../../stores/useGameStore';
 import type { FloorUnit } from '../../types';
@@ -11,8 +11,7 @@ import { QueueScene } from '../scenes/QueueScene';
 
 function yesterdaySummary(u: FloorUnit): string {
   const m = getMachine(u.machineId);
-  const flags = m.flags
-    .filter((f) => f.payout > 8)
+  const flags = counterFlags(m)
     .map((f) => `${f.label} ${u.yesterday.counts[f.key] ?? 0}回(${odds(u.yesterday.counts[f.key] ?? 0, u.yesterday.games)})`)
     .join('  ');
   return `前日 ${num(u.yesterday.games)}G  ${flags}  差枚 ${signedCoins(u.yesterday.coinDiff)}`;
@@ -32,8 +31,7 @@ function CounterStrip({ unit }: { unit: FloorUnit }) {
       <span className="text-[24px] text-amber-300">#{unit.unitNo}</span>
       <span className="w-[200px] truncate text-[18px]">{m.name}</span>
       {cell('前日', `${num(unit.yesterday.games)}G`)}
-      {m.flags
-        .filter((f) => f.payout > 8)
+      {counterFlags(m)
         .map((f) => (
           <div key={f.key}>{cell(f.label, `${unit.yesterday.counts[f.key] ?? 0} (${odds(unit.yesterday.counts[f.key] ?? 0, unit.yesterday.games)})`)}</div>
         ))}

@@ -23,8 +23,12 @@ export interface Environment {
   generosity: number;
   /** 軍団・設定師の多さ（0〜1）。抽選倍率と高設定の先取り精度に効く */
   crowdPressure: number;
-  /** ハイエナの期待値（枚/時）。時代とともに枯れていく */
+  /** ハイエナの期待値（枚/時）。拾える台がない時間も含めた1日平均。時代とともに枯れていく */
   hyenaCoinsPerHour: number;
+  /** 物価指数（2008年=1.00）。食費など日々の出費に掛かる */
+  priceIndex: number;
+  /** 月初の固定費（家賃・光熱通信・国保年金） */
+  monthlyFixedCost: number;
 }
 
 export interface RegulationNews {
@@ -40,17 +44,38 @@ export interface RegulationNews {
 
 export type MachineType = 'A_TYPE' | 'AT_HIGH_SPEC' | 'SMASLOT' | 'TECH';
 
-/** 抽選される役（ボーナス・AT初当り・小役）。payout は1回あたりの平均獲得枚数 */
+/**
+ * 抽選される役（ボーナス・AT初当り・小役・示唆・プレミア）。payout は1回あたりの平均獲得枚数。
+ * - NORMAL: 通常の役
+ * - HINT: 設定示唆・確定演出（出玉なし）。分母に Infinity を入れた設定では出現しない＝その設定を否定する
+ * - PREMIUM: フリーズ等のプレミアフラグ（大量出玉）
+ */
+export type FlagKind = 'NORMAL' | 'HINT' | 'PREMIUM';
+
+/** プレミア・確定演出が出たときの画面演出 */
+export type PremiumStyle = 'FREEZE' | 'BLACKOUT' | 'CONFIRM';
+
 export interface Flag {
   key: string;
   label: string;
-  /** 設定1〜6の分母（1/x の x） */
+  /** 設定1〜6の分母（1/x の x）。Infinity はその設定で出現しない */
   denominators: [number, number, number, number, number, number];
   payout: number;
   /** 1回あたり獲得枚数の標準偏差（AT/ARTの出玉ムラ）。固定払い出しなら0 */
   payoutSd: number;
-  /** 小役カウンターに表示する判別要素か */
+  /** カウント・判別の対象か */
   countable: boolean;
+  kind?: FlagKind;
+  /** 出現時の描写（示唆・プレミア） */
+  text?: string;
+  /** 示唆の意味として世間で言われていること（例: 「設定4以上濃厚」）。偽物示唆では誇張されている */
+  meaning?: string;
+  /**
+   * 解析で確率が判明しているか。false は「噂」レベルで、自作の判別ツールに入らない。
+   * 偽物示唆（意味ありげだが設定差がほぼない）はここが false
+   */
+  published?: boolean;
+  style?: PremiumStyle;
 }
 
 export interface Machine {
@@ -114,7 +139,40 @@ export interface FloorUnit {
 // 1日の進行
 // ============================================================
 
-export type Phase = 'TITLE' | 'MORNING' | 'FLOOR' | 'PLAYING' | 'LEDGER' | 'GAME_OVER';
+/**
+ * 1ターン = 1週間。
+ * WEEK_PLAN（方針決め）→ 自動稼働 →［勝負日: FLOOR → PLAYING → LEDGER］→ 自動稼働 → WEEK_END
+ */
+export type Phase = 'TITLE' | 'WEEK_PLAN' | 'FLOOR' | 'PLAYING' | 'LEDGER' | 'WEEK_END' | 'GAME_OVER';
+
+export type Lifestyle = 'COOK' | 'CONVENIENCE' | 'SENTO';
+
+export type WorkStyle = 'SETTING' | 'HYENA';
+
+/** 週の方針 */
+export interface WeekPlan {
+  lifestyle: Lifestyle;
+  /** おまかせ稼働で通う店 */
+  parlorId: string;
+  style: WorkStyle;
+  /** 勝負日を含む稼働日数 */
+  workDays: 5 | 6 | 7;
+  /** 手動で打つ勝負日（なしなら全日おまかせ） */
+  shoubu: { date: string; parlorId: string } | null;
+}
+
+/** 週の締めに表示する集計 */
+export interface WeekSummary {
+  start: string;
+  end: string;
+  workDays: number;
+  expectedValue: number;
+  actualProfit: number;
+  /** フリーズ・確定演出など、おまかせ稼働中の出来事 */
+  highlights: string[];
+  /** 月初の引き落としなど */
+  notices: string[];
+}
 
 export type ActionType = 'SETTING' | 'HYENA' | 'TECH' | 'REST';
 
@@ -186,7 +244,6 @@ export interface PlayerStats {
   currentDate: string; // YYYY-MM-DD
 }
 
-export type NightAction = 'COOK' | 'CONVENIENCE' | 'SENTO' | 'JOB_SITE';
 
 // ============================================================
 // ローグライク要素
@@ -241,4 +298,16 @@ export interface RunRecord {
   totalTrueEv: number;
   totalActual: number;
   reason: string;
+  /** この人生で得た記憶ポイント */
+  pointsEarned: number;
+}
+
+/** 人生をまたいで引き継ぐ知識（前世の記憶） */
+export type LegacyPerkId = 'HINT_INSIGHT' | 'PARLOR_HABIT' | 'AUTO_JUDGE' | 'EMERGENCY_FUND' | 'BODY_MEMORY' | 'THICK_SKIN';
+
+export interface LegacyPerk {
+  id: LegacyPerkId;
+  name: string;
+  description: string;
+  cost: number;
 }

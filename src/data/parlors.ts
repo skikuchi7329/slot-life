@@ -20,8 +20,9 @@ export const PARLORS: Parlor[] = [
     description: '常連の老人とタバコの煙。店長は設定をほとんど触らない。並びは数人。',
     unitCount: 24,
     baseQueue: 6,
-    normalWeights: [42, 30, 14, 8, 4, 2],
-    eventWeights: [42, 30, 14, 8, 4, 2],
+    // 客が少ないので高設定を取り合わずに済む「穴場」。ただし高設定はたまにしか入らない
+    normalWeights: [36, 28, 16, 10, 6, 4],
+    eventWeights: [36, 28, 16, 10, 6, 4],
     isEventDay: () => false,
     carryOverRate: 0.65,
   },

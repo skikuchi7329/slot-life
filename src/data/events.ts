@@ -1,7 +1,7 @@
 import type { EventChoice, EventContext, GameEvent } from '../types';
 
-/** 夜明けに1回判定される突発イベントの発生率 */
-export const EVENT_RATE = 0.14;
+/** 週の初めに1回判定される突発イベントの発生率 */
+export const EVENT_RATE = 0.4;
 
 const month = (ctx: EventContext) => ctx.date.getMonth() + 1;
 const year = (ctx: EventContext) => ctx.date.getFullYear();

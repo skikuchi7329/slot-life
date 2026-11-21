@@ -23,16 +23,18 @@ function Meter({ label, value, invert = false }: { label: string; value: number;
   );
 }
 
-export function Hud({ clock }: { clock: number }) {
+/** date を渡すと、その日付で表示する（週の締めは、もう翌週に進んだ日付ではなく週の最終日を出す） */
+export function Hud({ clock, date }: { clock: number; date?: string }) {
   const player = useGameStore((s) => s.player);
   const traitId = useGameStore((s) => s.traitId);
-  const env = getEnvironment(player.currentDate);
+  const shownDate = date ?? player.currentDate;
+  const env = getEnvironment(shownDate);
 
   return (
     <div className="absolute inset-x-0 top-0 z-10 flex h-[60px] items-center gap-8 border-b-2 border-black bg-black/80 px-6">
       <div className="leading-tight">
         <div className="text-[26px] tabular-nums">
-          {dateLabel(player.currentDate)} <span className="text-neutral-400">{clockLabel(clock)}</span>
+          {dateLabel(shownDate)} <span className="text-neutral-400">{clockLabel(clock)}</span>
         </div>
         <div className="text-[14px] text-neutral-400">
           {env.era.name}・{env.exchangeRate >= 20 ? '等価' : `${(100 / env.exchangeRate).toFixed(1)}枚交換`}・

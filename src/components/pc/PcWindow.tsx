@@ -55,6 +55,7 @@ const graveColumns: Column<RunRecord>[] = [
   { header: '記帳EV計', align: 'right', cell: (r) => signedYen(r.totalEv), negative: (r) => r.totalEv < 0 },
   { header: '真のEV計', align: 'right', cell: (r) => signedYen(r.totalTrueEv), negative: (r) => r.totalTrueEv < 0 },
   { header: '実収支計', align: 'right', cell: (r) => signedYen(r.totalActual), negative: (r) => r.totalActual < 0 },
+  { header: '記憶', align: 'right', cell: (r) => `+${r.pointsEarned ?? 1}` },
   { header: '最期', cell: (r) => r.reason },
 ];
 

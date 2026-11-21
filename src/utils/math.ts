@@ -51,6 +51,8 @@ export function randInt(min: number, max: number): number {
 
 /** 二項分布の対数尤度（定数項は省略）。設定判別のベイズ推定に使う */
 export function binomialLogLik(k: number, n: number, p: number): number {
+  // 確定演出：その設定では出現しない（p=0）役が出たら、その設定は否定される
+  if (p === 0) return k > 0 ? -Infinity : 0;
   return k * Math.log(p) + (n - k) * Math.log(1 - p);
 }
 

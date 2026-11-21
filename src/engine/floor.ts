@@ -9,7 +9,7 @@ const SETTINGS = [1, 2, 3, 4, 5, 6] as const;
 /** 並び客のうち、スロットの対象島に向かう割合 */
 const SLOT_TARGET_SHARE = 0.35;
 
-function settingWeights(parlor: Parlor, env: Environment, eventDay: boolean): number[] {
+export function settingWeights(parlor: Parlor, env: Environment, eventDay: boolean): number[] {
   let weights: number[] = parlor.normalWeights;
   if (eventDay) {
     // 告知禁止後も店は「匂わせ」で続けるが、投入量は半分程度に落ちる

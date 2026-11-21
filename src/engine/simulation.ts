@@ -75,14 +75,18 @@ export function simulateGames(machine: Machine, setting: number, games: number):
 }
 
 /**
- * 小役カウンターの数値から設定ごとの事後確率を求める（一様事前分布）。
+ * 小役カウンター・示唆の数値から設定ごとの事後確率を求める。
  * 専業がExcelで回している判別ツールと同じ二項尤度ベースの計算。
+ * 解析で確率が判明していない「噂」の示唆（published: false）は入らない。
+ * prior を省略すると一様事前分布（記帳用の判別ツールはこちら。ADR-007）。
  */
-export function settingPosterior(machine: Machine, games: number, counts: Record<string, number>): number[] {
-  const logLik = [1, 2, 3, 4, 5, 6].map((s) =>
-    machine.flags
-      .filter((f) => f.countable)
-      .reduce((acc, f) => acc + binomialLogLik(counts[f.key] ?? 0, games, 1 / f.denominators[s - 1]), 0),
+export function settingPosterior(machine: Machine, games: number, counts: Record<string, number>, prior?: number[]): number[] {
+  const logLik = [1, 2, 3, 4, 5, 6].map(
+    (s) =>
+      machine.flags
+        .filter((f) => f.countable && f.published !== false)
+        .reduce((acc, f) => acc + binomialLogLik(counts[f.key] ?? 0, games, 1 / f.denominators[s - 1]), 0) +
+      (prior ? Math.log(prior[s - 1]) : 0),
   );
   const max = Math.max(...logLik);
   const w = logLik.map((l) => Math.exp(l - max));
