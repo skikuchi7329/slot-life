@@ -42,10 +42,11 @@ export function ShoubuNightPhase() {
         text={daySummary(log)}
         choices={[
           { label: '週の残りを過ごす', sub: 'おまかせ稼働', onSelect: finishShoubu },
+          { label: '今日の店のデータを見る', sub: 'PC', onSelect: () => openPc('SHOP_DATA') },
           { label: '収支表を見返す', onSelect: () => openPc('LEDGER') },
         ]}
       />
-      <PcWindow tabs={['LEDGER', 'CHART']} />
+      <PcWindow tabs={['LEDGER', 'CHART', 'SHOP_DATA', 'SHOP_STATS']} />
     </>
   );
 }

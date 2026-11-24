@@ -1,4 +1,5 @@
 import { getMachine } from '../../data/machines';
+import { isFree } from '../../engine/floor';
 import type { FloorUnit } from '../../types';
 import { seeded } from '../../utils/math';
 import { PixelCanvas, Px, Sprite } from '../game/Pixel';
@@ -12,13 +13,15 @@ interface Props {
   interactive: boolean;
   onHover?: (unitNo: number | null) => void;
   onSelect?: (unitNo: number) => void;
+  /** この時刻の空き状況で描く（他の客が席を立った台は空き台になる）。省略時は開店時点 */
+  at?: number;
 }
 
 const MACHINE_W = 14;
 const ROW_Y = [22, 74];
 
 /** ホールの島。2列に並んだ台を正面から見る */
-export function FloorScene({ floor, seed, highlighted, interactive, onHover, onSelect }: Props) {
+export function FloorScene({ floor, seed, highlighted, interactive, onHover, onSelect, at }: Props) {
   const perRow = Math.ceil(floor.length / 2);
   const spacing = Math.min(16, 300 / perRow);
   const startX = Math.round((320 - perRow * spacing) / 2);
@@ -46,7 +49,7 @@ export function FloorScene({ floor, seed, highlighted, interactive, onHover, onS
         const x = Math.round(startX + col * spacing);
         const y = ROW_Y[row];
         const machine = getMachine(u.machineId);
-        const occupied = u.takenBy !== 'NONE';
+        const occupied = u.takenBy === 'PLAYER' || (at === undefined ? u.takenBy !== 'NONE' : !isFree(u, at));
         // 打たれている台はたまにランプが光っている（雰囲気のみ）
         const lamp = occupied && seeded(seed, u.unitNo) < 0.25;
         const selectable = interactive && !occupied;

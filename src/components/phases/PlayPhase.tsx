@@ -1,16 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getEnvironment } from '../../data/eras';
 import { counterFlags, getMachine, handCounterFlags, noteFlags } from '../../data/machines';
+import { currentData, isFree } from '../../engine/floor';
 import { expectedCoinsPerGame, settingPosterior } from '../../engine/simulation';
 import { CLOSE_TIME, useGameStore } from '../../stores/useGameStore';
 import { hasPerk } from '../../stores/useRunStore';
-import type { Flag, Machine, MachineType, PlaySession } from '../../types';
+import type { Flag, FloorEvent, FloorUnit, Machine, MachineType, PlaySession, Today } from '../../types';
+import { playConfirm, playFreeze } from '../../utils/audio';
 import { cn } from '../../utils/cn';
 import { clockLabel, num, odds, yen } from '../../utils/format';
+import { HitEffect } from '../effects/HitEffect';
+import { hitKindFor } from '../effects/hitKind';
 import { Hud } from '../game/Hud';
 import { MessageWindow, type Choice } from '../game/MessageWindow';
+import { UnitStrip } from '../parlor/UnitStrip';
 import { FloorScene } from '../scenes/FloorScene';
 import { MachineScene } from '../scenes/MachineScene';
+import { NoticeCard } from '../parlor/NoticeCard';
 
 /** 台の上のデータカウンター（当日分） */
 function DataCounter({ machine, session }: { machine: Machine; session: PlaySession }) {
@@ -115,6 +121,10 @@ function Notebook({ machine, session, rate }: { machine: Machine; session: PlayS
 /** 暗転・フリーズ・確定演出。派手にせず、ただ画面が黙る */
 function PremiumOverlay({ flag, onClose }: { flag: Flag; onClose: () => void }) {
   const confirm = flag.style === 'CONFIRM';
+  useEffect(() => {
+    if (confirm) playConfirm();
+    else playFreeze();
+  }, [confirm]);
   return (
     <>
       <div className={cn('scene-fade absolute inset-0 z-[15]', confirm ? 'bg-black/80' : 'bg-black')} />
@@ -148,14 +158,111 @@ function hintLines(machine: Machine, lastCounts: Record<string, number>): string
     );
 }
 
+function briefData(u: FloorUnit, t: number): string {
+  const d = currentData(u, t);
+  const flags = counterFlags(getMachine(u.machineId))
+    .map((f) => `${f.label}${d.counts[f.key] ?? 0}回`)
+    .join(' ');
+  return `${num(d.games)}G ${flags}`;
+}
+
+/** 島で起きた出来事の選択肢 */
+function FloorEventWindow({ event, today, clock }: { event: FloorEvent; today: Today; clock: number }) {
+  const resolve = useGameStore((s) => s.resolveFloorEvent);
+  const unit = 'unitNo' in event ? today.floor.find((u) => u.unitNo === event.unitNo) : undefined;
+  if (event.kind === 'YAME' && unit) {
+    return (
+      <MessageWindow
+        speaker="島"
+        text={`#${unit.unitNo}（${getMachine(unit.machineId).name}）の客が席を立った。\n${briefData(unit, clock)}。`}
+        choices={[
+          { label: 'その台に移る', onSelect: () => resolve(true) },
+          { label: '気にしない', onSelect: () => resolve(false) },
+        ]}
+      />
+    );
+  }
+  if (event.kind === 'NEIGHBOR_CONFIRM' && unit) {
+    return (
+      <MessageWindow
+        speaker="隣の台"
+        text={`隣の#${unit.unitNo}の客が、何も言わずに席を立った。\n液晶には「${event.label}」が残っている。……${event.meaning}。`}
+        choices={[
+          { label: '移る（今の台を捨てる）', onSelect: () => resolve(true) },
+          { label: '気にしない', onSelect: () => resolve(false) },
+        ]}
+      />
+    );
+  }
+  if (event.kind === 'BUYOUT') {
+    return (
+      <MessageWindow
+        speaker="若い男"
+        text={`背後から声をかけられた。「その台、${event.price.toLocaleString()}円で譲ってくれない？」\n男の後ろに、仲間らしき数人が立っている。`}
+        choices={[
+          { label: '売って帰る', sub: `+${event.price.toLocaleString()}円`, onSelect: () => resolve(true) },
+          { label: '断る', onSelect: () => resolve(false) },
+        ]}
+      />
+    );
+  }
+  return (
+    <MessageWindow
+      speaker="島"
+      text="店員が島の端で、台番をメモしている。\n明日の設定を考えているのかもしれない。"
+      choices={[{ label: '……', onSelect: () => resolve(false) }]}
+    />
+  );
+}
+
+/** 島を見て回り、空いた台（ヤメ台）に移る */
+function WalkView({ today, session, seed, onBack }: { today: Today; session: PlaySession; seed: string; onBack: () => void }) {
+  const moveTo = useGameStore((s) => s.moveTo);
+  const [hovered, setHovered] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const t = session.clock;
+  const target = today.floor.find((u) => u.unitNo === selected);
+  const panel = today.floor.find((u) => u.unitNo === (hovered ?? selected));
+  const free = today.floor.filter((u) => u.unitNo !== session.unitNo && isFree(u, t));
+  const panelToday =
+    panel && panel.unitNo === session.unitNo ? { games: session.games, counts: session.counts, coinDiff: session.coinDiff } : panel ? currentData(panel, t) : undefined;
+
+  return (
+    <>
+      <FloorScene floor={today.floor} seed={seed} highlighted={hovered ?? selected ?? session.unitNo} interactive onHover={setHovered} onSelect={setSelected} at={t} />
+      <Hud clock={t} />
+      {today.notice && <NoticeCard medium={today.notice.medium} text={today.notice.text} />}
+      {panel && (
+        <UnitStrip unit={panel} today={panelToday} status={panel.unitNo === session.unitNo ? '自分の台' : isFree(panel, t) ? '空き' : '着席中'} />
+      )}
+      {target ? (
+        <MessageWindow
+          text={`#${target.unitNo} ${getMachine(target.machineId).name}に移る？\n今の台のデータは、ここで打ち切りになる。`}
+          choices={[
+            { label: '移る', onSelect: () => (moveTo(target.unitNo), onBack()) },
+            { label: 'やめる', onSelect: () => setSelected(null) },
+          ]}
+        />
+      ) : (
+        <MessageWindow
+          text={`島を見て回る。空き台は ${free.length}台。\n他の台のデータカウンターに、店の意図が見えるかもしれない。（空き台をクリックで移動）`}
+          choices={[{ label: '自分の台に戻る', onSelect: onBack }]}
+        />
+      )}
+    </>
+  );
+}
+
 export function PlayPhase() {
   const today = useGameStore((s) => s.today);
   const date = useGameStore((s) => s.player.currentDate);
   const playHour = useGameStore((s) => s.playHour);
   const playToClose = useGameStore((s) => s.playToClose);
   const endSession = useGameStore((s) => s.endSession);
-  // 何時間目の演出まで見終えたか
-  const [seenUntil, setSeenUntil] = useState(0);
+  // 見終えた演出（台番と時間の組で管理する。台を移ると記録がリセットされるため）
+  const [seenPremium, setSeenPremium] = useState('');
+  const [seenHit, setSeenHit] = useState('');
+  const [walking, setWalking] = useState(false);
   const s = today?.session;
   if (!today || !s) return null;
 
@@ -164,19 +271,22 @@ export function PlayPhase() {
   const machine = s.machineId ? getMachine(s.machineId) : null;
   const last = s.log[s.log.length - 1];
   const lastCounts = s.lastCounts ?? {};
+  const seed = `${date}-${today.parlorId}`;
+  const moment = `${s.unitNo}:${s.log.length}`;
 
   const choices: Choice[] = closed
     ? [{ label: '閉店。精算して帰る', onSelect: endSession }]
     : [
         { label: machine ? '1時間回す' : '1時間巡回する', onSelect: playHour },
-        { label: `閉店（${clockLabel(CLOSE_TIME)}）まで${machine ? '回す' : '粘る'}`, sub: machine ? 'プレミアで止まる' : undefined, onSelect: playToClose },
+        { label: `閉店（${clockLabel(CLOSE_TIME)}）まで${machine ? '回す' : '粘る'}`, sub: machine ? '何か起きたら止まる' : undefined, onSelect: playToClose },
+        ...(machine ? [{ label: '島を見て回る', sub: '空き台に移れる', onSelect: () => setWalking(true) }] : []),
         { label: 'ヤメて精算する', onSelect: endSession },
       ];
 
   if (!machine) {
     return (
       <>
-        <FloorScene floor={today.floor} seed={`${date}-${today.parlorId}`} interactive={false} />
+        <FloorScene floor={today.floor} seed={seed} interactive={false} at={s.clock} />
         <Hud clock={s.clock} />
         <MessageWindow
           text={
@@ -190,9 +300,11 @@ export function PlayPhase() {
     );
   }
 
+  if (walking && !closed) return <WalkView today={today} session={s} seed={seed} onBack={() => setWalking(false)} />;
+
   const hit = counterFlags(machine).some((f) => (lastCounts[f.key] ?? 0) > 0);
-  const premium = machine.flags.find((f) => f.style && (lastCounts[f.key] ?? 0) > 0);
-  const showPremium = premium && seenUntil < s.log.length;
+  const premium = s.log.length > 0 ? machine.flags.find((f) => f.style && (lastCounts[f.key] ?? 0) > 0) : undefined;
+  const hitKind = s.log.length > 0 ? hitKindFor(machine, lastCounts, s.lastDiff ?? 0) : null;
   const hints = hintLines(machine, lastCounts);
 
   const flavor = closed
@@ -202,10 +314,19 @@ export function PlayPhase() {
       : hints.length > 0
         ? hints[0]
         : hit
-          ? machine.type === 'A_TYPE'
-            ? 'ペカッ。……淡々と揃える。'
-            : '当たった。だが、これが何を意味するかはまだ分からない。'
+          ? (s.lastDiff ?? 0) >= 1500
+            ? '出た。今日いちばんの波だ。……それでも、期待値の一部にすぎない。'
+            : machine.type === 'A_TYPE'
+              ? 'ペカッ。……淡々と揃える。'
+              : '当たった。だが、これが何を意味するかはまだ分からない。'
           : '淡々と回す。レバーを叩く右手だけが動いている。';
+
+  let overlay;
+  if (premium && seenPremium !== moment) overlay = <PremiumOverlay flag={premium} onClose={() => setSeenPremium(moment)} />;
+  else if (hitKind && seenHit !== moment)
+    overlay = <HitEffect kind={hitKind} machine={machine} lastCounts={lastCounts} lastDiff={s.lastDiff ?? 0} onDone={() => setSeenHit(moment)} />;
+  else if (today.floorEvent) overlay = <FloorEventWindow event={today.floorEvent} today={today} clock={s.clock} />;
+  else overlay = <MessageWindow speaker={`${machine.name} #${s.unitNo}`} text={`${last ? `${last}\n` : ''}${flavor}`} choices={choices} />;
 
   return (
     <>
@@ -214,11 +335,7 @@ export function PlayPhase() {
       <DataCounter machine={machine} session={s} />
       <HandCounter machine={machine} session={s} />
       <Notebook machine={machine} session={s} rate={env.exchangeRate} />
-      {showPremium ? (
-        <PremiumOverlay flag={premium} onClose={() => setSeenUntil(s.log.length)} />
-      ) : (
-        <MessageWindow speaker={`${machine.name} #${s.unitNo}`} text={`${last ? `${last}\n` : ''}${flavor}`} choices={choices} />
-      )}
+      {overlay}
     </>
   );
 }

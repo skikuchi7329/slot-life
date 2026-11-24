@@ -4,17 +4,21 @@ import { GAME_END_DATE, GAME_START_DATE, getEnvironment, newsBetween } from '../
 import { EVENT_RATE, EVENTS, getEvent, resolveChoices } from '../data/events';
 import { pointsForRun } from '../data/legacy';
 import { getMachine } from '../data/machines';
-import { getParlor } from '../data/parlors';
+import { generateParlors } from '../data/parlors';
 import { getTrait } from '../data/traits';
-import { autoDay, dayStrain, HYENA_MARK_PER_HOUR } from '../engine/autoplay';
-import { applyLottery, drawLotteryNumber, generateFloor, isEventDay, rollQueue } from '../engine/floor';
+import { autoDay, dayStrain, HYENA_MARK_PER_HOUR, mergeLogs, simulateParlorDay } from '../engine/autoplay';
+import { isFree, noticeFor, snapshotOf } from '../engine/floor';
+import { rollFloorEvent } from '../engine/floorEvents';
 import { advanceSession, CLOSE_TIME, makeLog, newSession, notableEvents, OPEN_TIME } from '../engine/session';
 import type {
   DayLog,
+  EndingId,
   EventContext,
   Lifestyle,
+  ParlorProfile,
   Phase,
   PlayerStats,
+  PlaySession,
   RegulationNews,
   StatDelta,
   Today,
@@ -25,6 +29,7 @@ import { addDays, clockLabel, parseDate } from '../utils/format';
 import { clamp, pickWeighted } from '../utils/math';
 import { useLogStore } from './useLogStore';
 import { hasPerk, useRunStore } from './useRunStore';
+import { DATA_SITE_DATE, useShopDataStore } from './useShopDataStore';
 
 export { CLOSE_TIME, OPEN_TIME };
 
@@ -32,6 +37,12 @@ export { CLOSE_TIME, OPEN_TIME };
 const SLEEP_RECOVERY = { health: 5, mental: 2 };
 /** 休みの日の回復 */
 const REST_DAY = { health: 8, mental: -2 };
+
+/** 消費者金融の年利と、2010年6月の総量規制（貸金業法の完全施行） */
+const LOAN_RATE = 0.18;
+export const TOTAL_VOLUME_REGULATION = '2010-06-18';
+/** 実家への仕送り（物語で選んだ場合） */
+const SEND_MONEY = 50_000;
 
 /** 週の暮らし方。費用は2008年時点の1日あたりの額で、物価指数が掛かる */
 const LIFESTYLES: Record<Lifestyle, { label: string; cost: number; health: number; mental: number }> = {
@@ -56,12 +67,14 @@ const BLANK_PLAYER: PlayerStats = {
   hallMark: 0,
   socialCredit: 40,
   currentDate: GAME_START_DATE,
+  debt: 0,
 };
 
 interface GameState {
   player: PlayerStats;
   phase: Phase;
   traitId: string | null;
+  parlors: ParlorProfile[];
   weekStart: string;
   plan: WeekPlan | null;
   lastPlan: WeekPlan | null;
@@ -72,26 +85,35 @@ interface GameState {
   newsShownUntil: string;
   pendingEventId: string | null;
   seenEventIds: string[];
+  flags: Record<string, number>;
+  flagDates: Record<string, string>;
   notices: string[];
   gameOverReason: string | null;
+  ending: EndingId | null;
 
   startRun: (traitId: string) => void;
   planWeek: (plan: WeekPlan) => void;
   sitDown: (unitNo: number) => void;
+  moveTo: (unitNo: number) => void;
   startHyena: () => void;
   playHour: () => void;
   playToClose: () => void;
+  resolveFloorEvent: (accept: boolean) => void;
   endSession: () => void;
   leaveFloor: () => void;
   finishShoubu: () => void;
   nextWeek: (lookAtJobs: boolean) => void;
+  deposit: (amount: number) => void;
+  withdraw: (amount: number) => void;
+  borrow: (amount: number) => void;
+  repay: (amount: number) => void;
   dismissNews: () => void;
   resolveEvent: (choiceIndex: number) => void;
   backToTitle: () => void;
 }
 
-export function eventContext(player: PlayerStats): EventContext {
-  return { player, date: parseDate(player.currentDate), env: getEnvironment(player.currentDate) };
+export function eventContext(player: PlayerStats, flags: Record<string, number> = {}, flagDates: Record<string, string> = {}): EventContext {
+  return { player, date: parseDate(player.currentDate), env: getEnvironment(player.currentDate), flags, flagDates };
 }
 
 export function weekDates(weekStart: string): string[] {
@@ -106,6 +128,12 @@ export function restDates(weekStart: string, plan: WeekPlan): string[] {
     .slice(0, 7 - plan.workDays);
 }
 
+/** 消費者金融で借りられる上限。総量規制後は、無職の専業はほぼ借りられない */
+export function borrowLimit(p: PlayerStats): number {
+  if (p.currentDate < TOTAL_VOLUME_REGULATION) return Math.max(0, 1_000_000 - p.debt);
+  return p.socialCredit >= 60 ? Math.max(0, 300_000 - p.debt) : 0;
+}
+
 function applyDelta(player: PlayerStats, d: StatDelta): PlayerStats {
   return {
     ...player,
@@ -117,54 +145,85 @@ function applyDelta(player: PlayerStats, d: StatDelta): PlayerStats {
   };
 }
 
+/** 現金が尽きたら、貯金に手をつける */
+function settleCash(p: PlayerStats, notes: string[]): PlayerStats {
+  if (p.cash >= 0 || p.bankSavings <= 0) return p;
+  const need = Math.min(p.bankSavings, Math.ceil(-p.cash / 10_000) * 10_000);
+  notes.push(`現金が尽き、貯金から ${need.toLocaleString()}円を下ろした。`);
+  return { ...p, cash: p.cash + need, bankSavings: p.bankSavings - need, mental: clamp(p.mental - 5, 0, 100) };
+}
+
 /** 人生の終わり判定。終わっていなければ null */
-function endReason(p: PlayerStats): string | null {
-  if (p.cash < 0) return '資金が尽きた。収支表の期待値の列だけが、最後まで何かを約束していた。';
-  if (p.health <= 0) return '朝、起き上がれなかった。救急車の中でデータカウンターの数字を思い出していた。';
-  if (p.mental <= 0) return 'ある朝、ホールに向かう足が止まった。もう数字を見たくなかった。';
-  if (p.currentDate > GAME_END_DATE) return '2026年が終わった。スプレッドシートの最終行に、何を書けばいいのかわからない。';
+function endReason(p: PlayerStats): { ending: EndingId; text: string } | null {
+  if (p.cash < 0) return { ending: 'BANKRUPT', text: '資金が尽きた。収支表の期待値の列だけが、最後まで何かを約束していた。' };
+  if (p.health <= 0) return { ending: 'BROKEN_BODY', text: '朝、起き上がれなかった。救急車の中でデータカウンターの数字を思い出していた。' };
+  if (p.mental <= 0) return { ending: 'BROKEN_MIND', text: 'ある朝、ホールに向かう足が止まった。もう数字を見たくなかった。' };
+  if (p.currentDate > GAME_END_DATE) {
+    const worth = p.cash + p.bankSavings - p.debt;
+    return worth >= 10_000_000
+      ? { ending: 'LEGEND', text: `2026年が終わった。手元には${Math.round(worth / 10_000).toLocaleString()}万円。人はそれを伝説と呼ぶのかもしれない。収支表の行数だけが、自分の人生だった。` }
+      : { ending: 'SURVIVOR', text: '2026年が終わった。スプレッドシートの最終行に、何を書けばいいのかわからない。' };
+  }
   return null;
 }
 
-function rollEvent(player: PlayerStats, seen: string[]): string | null {
+function rollEvent(ctx: EventContext, seen: string[]): string | null {
   if (Math.random() >= EVENT_RATE) return null;
-  const ctx = eventContext(player);
   const eligible = EVENTS.filter((e) => e.condition(ctx) && !(e.once && seen.includes(e.id)));
   if (eligible.length === 0) return null;
   return pickWeighted(eligible, eligible.map((e) => e.weight)).id;
 }
 
+interface DayContext {
+  traitId: string | null;
+  flags: Record<string, number>;
+  week: WeekSummary;
+}
+
 /**
- * 1日を締める。暮らし方の出費と回復、睡眠、月初の引き落としを適用して翌日に進める。
+ * 1日を締める。暮らし方の出費と回復、睡眠、月初の引き落とし（固定費・仕送り・借金の返済）を適用して翌日に進める。
  */
-function closeDay(player: PlayerStats, lifestyle: Lifestyle, traitId: string | null, week: WeekSummary): PlayerStats {
+function closeDay(player: PlayerStats, lifestyle: Lifestyle, ctx: DayContext): PlayerStats {
   const l = LIFESTYLES[lifestyle];
   const date = player.currentDate;
   const next = addDays(date, 1);
   const sleepHealth = SLEEP_RECOVERY.health + (hasPerk('BODY_MEMORY') ? 2 : 0);
   let cash = player.cash - lifestyleCost(lifestyle, date);
+  let debt = player.debt;
+  const notes = ctx.week.notices;
   if (parseDate(next).getDate() === 1) {
     const env = getEnvironment(next);
-    const trait = getTrait(traitId ?? '');
+    const trait = getTrait(ctx.traitId ?? '');
     cash -= env.monthlyFixedCost;
-    week.notices.push(`月初の引き落とし。家賃・光熱費・国保年金で ${env.monthlyFixedCost.toLocaleString()}円が消えた。`);
+    notes.push(`月初の引き落とし。家賃・光熱費・国保年金で ${env.monthlyFixedCost.toLocaleString()}円。`);
     if (trait.monthlyDelta !== 0) {
       cash += trait.monthlyDelta;
-      week.notices.push(
-        trait.monthlyDelta > 0
-          ? `実家から ${trait.monthlyDelta.toLocaleString()}円が振り込まれていた。`
-          : `借金の返済で ${(-trait.monthlyDelta).toLocaleString()}円が引き落とされた。`,
-      );
+      notes.push(trait.monthlyDelta > 0 ? `実家から ${trait.monthlyDelta.toLocaleString()}円の振り込み。` : `借金の返済で ${(-trait.monthlyDelta).toLocaleString()}円。`);
+    }
+    if ((ctx.flags.sendMoney ?? 0) > 0) {
+      cash -= SEND_MONEY;
+      notes.push(`実家への仕送り ${SEND_MONEY.toLocaleString()}円。`);
+    }
+    if (debt > 0) {
+      const balance = Math.round(debt * (1 + LOAN_RATE / 12));
+      const payment = Math.min(balance, Math.max(10_000, Math.round(balance * 0.04)));
+      debt = balance - payment;
+      cash -= payment;
+      notes.push(`消費者金融への返済 ${payment.toLocaleString()}円（残高 ${debt.toLocaleString()}円）。`);
     }
   }
-  return {
-    ...player,
-    cash,
-    currentDate: next,
-    health: clamp(player.health + l.health + sleepHealth, 0, 100),
-    mental: clamp(player.mental + l.mental + SLEEP_RECOVERY.mental, 0, 100),
-    hallMark: clamp(player.hallMark - 1, 0, 100),
-  };
+  return settleCash(
+    {
+      ...player,
+      cash,
+      debt,
+      currentDate: next,
+      health: clamp(player.health + l.health + sleepHealth, 0, 100),
+      mental: clamp(player.mental + l.mental + SLEEP_RECOVERY.mental, 0, 100),
+      hallMark: clamp(player.hallMark - 1, 0, 100),
+    },
+    notes,
+  );
 }
 
 function addToWeek(week: WeekSummary, log: DayLog, highlights: string[]) {
@@ -174,31 +233,53 @@ function addToWeek(week: WeekSummary, log: DayLog, highlights: string[]) {
   week.highlights.push(...highlights.map((h) => `${log.date.slice(5).replace('-', '/')} ${h}`));
 }
 
+/** データサイトの時代は、行かなかった店の閉店後データもネットで見られる */
+function recordDataSite(parlors: ParlorProfile[], date: string, skip: string | null) {
+  if (date < DATA_SITE_DATE) return;
+  const record = useShopDataStore.getState().record;
+  for (const p of parlors) {
+    if (p.id === skip) continue;
+    const { floor, notice } = simulateParlorDay(p, date);
+    record(p.id, snapshotOf(date, floor, notice));
+  }
+}
+
 /**
  * until の前日まで、方針どおりにおまかせで日々を消化する。途中で人生が終わったら理由を返す。
  */
-function runDays(player: PlayerStats, until: string, plan: WeekPlan, traitId: string | null, weekStart: string, week: WeekSummary) {
+function runDays(player: PlayerStats, until: string, plan: WeekPlan, parlors: ParlorProfile[], weekStart: string, ctx: DayContext) {
   const rests = restDates(weekStart, plan);
   const append = useLogStore.getState().append;
+  const home = parlors.find((p) => p.id === plan.parlorId) ?? parlors[0];
   let p = player;
   while (p.currentDate < until) {
     if (rests.includes(p.currentDate)) {
       append(makeLog(p.currentDate, 'REST', '—', '—', null, null, '休み'));
       p = applyDelta(p, REST_DAY);
+      recordDataSite(parlors, p.currentDate, null);
     } else {
+      // 設定狙いの日は、告知が出ている店があればそちらへ行く（いつもの店に告知があれば優先）
+      const env = getEnvironment(p.currentDate);
+      const noticed = parlors.filter((x) => noticeFor(x, env, p.currentDate));
+      const target = plan.style !== 'HYENA' && noticed.length > 0 ? (noticed.find((x) => x.id === home.id) ?? noticed[0]) : null;
+      const parlor = target ?? home;
+      const style = target ? 'SETTING' : plan.style === 'TARGET' ? 'HYENA' : plan.style;
       const r = autoDay({
         date: p.currentDate,
-        parlorId: plan.parlorId,
-        style: plan.style,
+        parlor,
+        style,
+        pickRule: target ? 'NOTICE' : plan.pickRule,
         hallMark: p.hallMark,
         autoJudge: hasPerk('AUTO_JUDGE'),
         thickSkin: hasPerk('THICK_SKIN'),
       });
       append(r.log);
-      addToWeek(week, r.log, r.highlights);
+      useShopDataStore.getState().record(parlor.id, r.snapshot);
+      recordDataSite(parlors, p.currentDate, parlor.id);
+      addToWeek(ctx.week, r.log, r.highlights);
       p = applyDelta(p, { cash: r.log.actualProfit, health: r.health, mental: r.mental, hallMark: r.hallMark });
     }
-    p = closeDay(p, plan.lifestyle, traitId, week);
+    p = closeDay(p, plan.lifestyle, ctx);
     const reason = endReason(p);
     if (reason) return { player: p, reason };
   }
@@ -209,11 +290,15 @@ function emptyWeek(weekStart: string): WeekSummary {
   return { start: weekStart, end: addDays(weekStart, 6), workDays: 0, expectedValue: 0, actualProfit: 0, highlights: [], notices: [] };
 }
 
+function sessionData(s: PlaySession) {
+  return { games: s.games, counts: s.counts, coinDiff: s.coinDiff };
+}
+
 export const useGameStore = create<GameState>()(
   persist(
     (set, get) => {
       /** 人生を終わらせ、墓標に刻む */
-      const finishRun = (player: PlayerStats, reason: string) => {
+      const finishRun = (player: PlayerStats, reason: { ending: EndingId; text: string }) => {
         const logs = useLogStore.getState().logs;
         const weeksLived = Math.floor(logs.length / 7);
         useRunStore.getState().record({
@@ -222,35 +307,46 @@ export const useGameStore = create<GameState>()(
           startDate: GAME_START_DATE,
           endDate: player.currentDate,
           workDays: logs.filter((l) => l.actionType !== 'REST').length,
-          finalCash: player.cash,
+          finalCash: player.cash + player.bankSavings - player.debt,
           totalEv: logs.reduce((a, l) => a + l.expectedValue, 0),
           totalTrueEv: logs.reduce((a, l) => a + l.trueExpectedValue, 0),
           totalActual: logs.reduce((a, l) => a + l.actualProfit, 0),
-          reason,
-          pointsEarned: pointsForRun(weeksLived, player.currentDate > GAME_END_DATE),
+          reason: reason.text,
+          pointsEarned: pointsForRun(weeksLived, reason.ending === 'SURVIVOR' || reason.ending === 'LEGEND'),
+          ending: reason.ending,
         });
-        set({ player, phase: 'GAME_OVER', gameOverReason: reason, today: null, pendingEventId: null });
+        set({ player, phase: 'GAME_OVER', gameOverReason: reason.text, ending: reason.ending, today: null, pendingEventId: null });
       };
+
+      const dayCtx = (week: WeekSummary): DayContext => ({ traitId: get().traitId, flags: get().flags, week });
 
       /** 勝負日：ホールへ行き、抽選を受ける */
       const goToParlor = (parlorId: string) => {
-        const { player } = get();
-        const parlor = getParlor(parlorId);
-        const env = getEnvironment(player.currentDate);
-        const eventDay = isEventDay(parlor, player.currentDate);
-        const queueSize = rollQueue(parlor, env, eventDay);
-        const lotteryNumber = drawLotteryNumber(queueSize);
-        const floor = applyLottery(generateFloor(parlor, env, player.currentDate, eventDay), lotteryNumber, env);
+        const { player, parlors } = get();
+        const parlor = parlors.find((p) => p.id === parlorId) ?? parlors[0];
+        const { floor, notice, queue, lottery } = simulateParlorDay(parlor, player.currentDate);
         set({
           phase: 'FLOOR',
-          today: { parlorId, lotteryNumber, queueSize, isEventDay: eventDay, floor, session: null },
+          today: { parlorId, lotteryNumber: lottery, queueSize: queue, notice, floor, session: null, pastSessions: [], floorEvent: null },
         });
+      };
+
+      const startSessionOn = (today: Today, unitNo: number, clock: number): Today => {
+        const unit = today.floor.find((u) => u.unitNo === unitNo)!;
+        const machine = getMachine(unit.machineId);
+        return {
+          ...today,
+          floor: today.floor.map((u) => (u.unitNo === unitNo ? { ...u, takenBy: 'PLAYER' } : u)),
+          session: newSession(machine.type === 'TECH' ? 'TECH' : 'SETTING', unitNo, unit.machineId, unit.setting, clock),
+          floorEvent: null,
+        };
       };
 
       return {
         player: BLANK_PLAYER,
         phase: 'TITLE',
         traitId: null,
+        parlors: [],
         weekStart: GAME_START_DATE,
         plan: null,
         lastPlan: null,
@@ -261,17 +357,22 @@ export const useGameStore = create<GameState>()(
         newsShownUntil: GAME_START_DATE,
         pendingEventId: null,
         seenEventIds: [],
+        flags: {},
+        flagDates: {},
         notices: [],
         gameOverReason: null,
+        ending: null,
 
         startRun: (traitId) => {
           const trait = getTrait(traitId);
           useLogStore.getState().clear();
+          useShopDataStore.getState().clear();
           const bonus = hasPerk('EMERGENCY_FUND') ? 150_000 : 0;
           set({
             player: { ...BLANK_PLAYER, ...trait.stats, cash: trait.stats.cash + bonus },
             phase: 'WEEK_PLAN',
             traitId,
+            parlors: generateParlors(),
             weekStart: GAME_START_DATE,
             plan: null,
             lastPlan: null,
@@ -282,16 +383,19 @@ export const useGameStore = create<GameState>()(
             newsShownUntil: GAME_START_DATE,
             pendingEventId: null,
             seenEventIds: [],
+            flags: {},
+            flagDates: {},
             notices: [trait.intro, ...(bonus ? ['前の人生の反省で、15万円だけは手をつけずに残してある。'] : [])],
             gameOverReason: null,
+            ending: null,
           });
         },
 
         planWeek: (plan) => {
-          const { player, traitId, weekStart } = get();
+          const { player, weekStart, parlors } = get();
           const week = emptyWeek(weekStart);
           const until = plan.shoubu?.date ?? addDays(weekStart, 7);
-          const r = runDays(player, until, plan, traitId, weekStart, week);
+          const r = runDays(player, until, plan, parlors, weekStart, dayCtx(week));
           set({ plan, lastPlan: plan, week, player: r.player, notices: [] });
           if (r.reason) {
             finishRun(r.player, r.reason);
@@ -305,18 +409,22 @@ export const useGameStore = create<GameState>()(
           const { today } = get();
           if (!today) return;
           const unit = today.floor.find((u) => u.unitNo === unitNo);
-          if (!unit || unit.takenBy !== 'NONE') return;
-          const machine = getMachine(unit.machineId);
           const entry = OPEN_TIME + Math.floor(today.lotteryNumber / 30);
-          const session = newSession(machine.type === 'TECH' ? 'TECH' : 'SETTING', unitNo, unit.machineId, unit.setting, entry);
-          set({
-            phase: 'PLAYING',
-            today: {
-              ...today,
-              floor: today.floor.map((u) => (u.unitNo === unitNo ? { ...u, takenBy: 'PLAYER' } : u)),
-              session,
-            },
-          });
+          if (!unit || !isFree(unit, entry)) return;
+          set({ phase: 'PLAYING', today: startSessionOn(today, unitNo, entry) });
+        },
+
+        moveTo: (unitNo) => {
+          const { today } = get();
+          if (!today?.session) return;
+          const s = today.session;
+          const unit = today.floor.find((u) => u.unitNo === unitNo);
+          if (!unit || !isFree(unit, s.clock)) return;
+          // 席を立った台は、自分のデータを残して空き台になる
+          const floor = today.floor.map((u) =>
+            u.unitNo === s.unitNo ? { ...u, takenBy: 'OTHER' as const, quitAt: s.clock, closing: sessionData(s) } : u,
+          );
+          set({ today: startSessionOn({ ...today, floor, pastSessions: [...today.pastSessions, s] }, unitNo, s.clock) });
         },
 
         startHyena: () => {
@@ -328,52 +436,94 @@ export const useGameStore = create<GameState>()(
 
         playHour: () => {
           const { today, player } = get();
-          if (!today?.session) return;
+          if (!today?.session || today.floorEvent) return;
+          const prevClock = today.session.clock;
           const session = advanceSession(today.session, player.hallMark, player.currentDate);
           const markUp = session.actionType === 'HYENA' ? HYENA_MARK_PER_HOUR : 0;
+          const floorEvent = session.actionType === 'HYENA' ? null : rollFloorEvent(today, session, prevClock, player.currentDate);
           set({
-            today: { ...today, session },
+            today: { ...today, session, floorEvent },
             player: { ...player, hallMark: clamp(player.hallMark + markUp, 0, 100) },
           });
         },
 
         playToClose: () => {
           const { today, player } = get();
-          if (!today?.session) return;
+          if (!today?.session || today.floorEvent) return;
           let session = today.session;
           let hallMark = player.hallMark;
-          // プレミア・確定演出を引いたら、その時点で止めて見せる
+          let floorEvent = null;
+          // プレミア・確定演出・島の出来事が起きたら、その時点で止めて見せる
           while (session.clock < CLOSE_TIME) {
+            const prevClock = session.clock;
             session = advanceSession(session, hallMark, player.currentDate);
-            if (session.actionType === 'HYENA') hallMark = clamp(hallMark + HYENA_MARK_PER_HOUR, 0, 100);
+            if (session.actionType === 'HYENA') {
+              hallMark = clamp(hallMark + HYENA_MARK_PER_HOUR, 0, 100);
+              continue;
+            }
+            floorEvent = rollFloorEvent(today, session, prevClock, player.currentDate);
             const machine = session.machineId ? getMachine(session.machineId) : null;
-            if (machine && notableEvents(machine, session.lastCounts).length > 0) break;
+            if (floorEvent || (machine && notableEvents(machine, session.lastCounts).length > 0)) break;
           }
-          set({ today: { ...today, session }, player: { ...player, hallMark } });
+          set({ today: { ...today, session, floorEvent }, player: { ...player, hallMark } });
+        },
+
+        resolveFloorEvent: (accept) => {
+          const { today, player } = get();
+          if (!today?.floorEvent || !today.session) return;
+          const ev = today.floorEvent;
+          const cleared = { ...today, floorEvent: null };
+          if (!accept) {
+            set({ today: cleared });
+            return;
+          }
+          if (ev.kind === 'YAME' || ev.kind === 'NEIGHBOR_CONFIRM') {
+            set({ today: cleared });
+            get().moveTo(ev.unitNo);
+          } else if (ev.kind === 'BUYOUT') {
+            // 台を売って帰る。売った金は記帳しない（裏の金）
+            set({ today: cleared, player: applyDelta(player, { cash: ev.price, mental: -3, hallMark: 5 }) });
+            get().endSession();
+          } else {
+            set({ today: cleared });
+          }
         },
 
         endSession: () => {
-          const { today, player, week } = get();
+          const { today, player, week, parlors } = get();
           if (!today?.session || !week) return;
-          const s = today.session;
-          const parlor = getParlor(today.parlorId);
-          const unit = s.unitNo ? today.floor.find((u) => u.unitNo === s.unitNo) : undefined;
-          const machine = s.machineId ? getMachine(s.machineId) : null;
-          const machineName = machine ? `${machine.name} #${s.unitNo}` : 'ハイエナ巡回';
-          const log = makeLog(
-            player.currentDate,
-            s.actionType,
-            parlor.name,
-            machineName,
-            s,
-            unit?.setting ?? null,
-            `勝負日 ${clockLabel(s.clock)}ヤメ / 抽選${today.lotteryNumber}番`,
+          const parlor = parlors.find((p) => p.id === today.parlorId) ?? parlors[0];
+          const sessions = [...today.pastSessions, today.session];
+          const logs = sessions.map((s) => {
+            const unit = s.unitNo ? today.floor.find((u) => u.unitNo === s.unitNo) : undefined;
+            const machine = s.machineId ? getMachine(s.machineId) : null;
+            return makeLog(player.currentDate, s.actionType, parlor.name, machine ? `${machine.name} #${s.unitNo}` : 'ハイエナ巡回', s, unit?.setting ?? null, '');
+          });
+          const last = today.session;
+          const log = mergeLogs(
+            logs,
+            `勝負日 抽選${today.lotteryNumber}番${sessions.length > 1 ? ` 移動${sessions.length - 1}回` : ''} ${clockLabel(last.clock)}ヤメ`,
           );
           useLogStore.getState().append(log);
+          useShopDataStore
+            .getState()
+            .record(
+              parlor.id,
+              snapshotOf(
+                player.currentDate,
+                today.floor,
+                today.notice,
+                sessions.filter((s) => s.unitNo !== null).map((s) => ({ unitNo: s.unitNo!, data: sessionData(s) })),
+              ),
+            );
+          const highlights = sessions.flatMap((s) => {
+            const machine = s.machineId ? getMachine(s.machineId) : null;
+            return machine ? notableEvents(machine, s.counts).map((h) => `${machine.name} #${s.unitNo}で${h}`) : [];
+          });
           const nextWeek = { ...week, highlights: [...week.highlights], notices: [...week.notices] };
-          addToWeek(nextWeek, log, machine ? notableEvents(machine, s.counts).map((h) => `${machineName}で${h}`) : []);
+          addToWeek(nextWeek, log, highlights);
           const entry = OPEN_TIME + Math.floor(today.lotteryNumber / 30);
-          const strain = dayStrain(log, (s.clock - entry) / 60, hasPerk('THICK_SKIN'));
+          const strain = dayStrain(log, (last.clock - entry) / 60, hasPerk('THICK_SKIN'));
           set({
             phase: 'LEDGER',
             lastLog: log,
@@ -383,40 +533,42 @@ export const useGameStore = create<GameState>()(
         },
 
         leaveFloor: () => {
-          const { today, player } = get();
+          const { today, player, parlors } = get();
           if (!today) return;
-          const parlor = getParlor(today.parlorId);
+          const parlor = parlors.find((p) => p.id === today.parlorId) ?? parlors[0];
           const log = makeLog(player.currentDate, 'REST', parlor.name, '—', null, null, `勝負日 抽選${today.lotteryNumber}番/${today.queueSize}人。座る台がなく帰宅。`);
           useLogStore.getState().append(log);
+          useShopDataStore.getState().record(parlor.id, snapshotOf(player.currentDate, today.floor, today.notice));
           set({ phase: 'LEDGER', lastLog: log, player: applyDelta(player, { mental: -4 }) });
         },
 
         finishShoubu: () => {
-          const { player, plan, traitId, weekStart, week } = get();
+          const { player, plan, weekStart, week, parlors, today } = get();
           if (!plan || !week) return;
           const w = { ...week, highlights: [...week.highlights], notices: [...week.notices] };
-          const closed = closeDay(player, plan.lifestyle, traitId, w);
+          recordDataSite(parlors, player.currentDate, today?.parlorId ?? plan.shoubu?.parlorId ?? null);
+          const closed = closeDay(player, plan.lifestyle, dayCtx(w));
           const reason = endReason(closed);
           if (reason) {
             set({ week: w });
             finishRun(closed, reason);
             return;
           }
-          const r = runDays(closed, addDays(weekStart, 7), plan, traitId, weekStart, w);
+          const r = runDays(closed, addDays(weekStart, 7), plan, parlors, weekStart, dayCtx(w));
           set({ week: w, player: r.player, today: null });
           if (r.reason) finishRun(r.player, r.reason);
           else set({ phase: 'WEEK_END' });
         },
 
         nextWeek: (lookAtJobs) => {
-          const { player, seenEventIds, newsShownUntil } = get();
+          const { player, seenEventIds, newsShownUntil, flags, flagDates } = get();
           const p = lookAtJobs ? applyDelta(player, { mental: -7, socialCredit: 1 }) : player;
           const reason = endReason(p);
           if (reason) {
             finishRun(p, reason);
             return;
           }
-          const eventId = rollEvent(p, seenEventIds);
+          const eventId = rollEvent(eventContext(p, flags, flagDates), seenEventIds);
           set({
             player: p,
             phase: 'WEEK_PLAN',
@@ -432,14 +584,46 @@ export const useGameStore = create<GameState>()(
           });
         },
 
+        deposit: (amount) => {
+          const { player } = get();
+          const a = Math.min(amount, Math.max(0, player.cash));
+          set({ player: { ...player, cash: player.cash - a, bankSavings: player.bankSavings + a } });
+        },
+
+        withdraw: (amount) => {
+          const { player } = get();
+          const a = Math.min(amount, player.bankSavings);
+          set({ player: { ...player, cash: player.cash + a, bankSavings: player.bankSavings - a, mental: clamp(player.mental - 2, 0, 100) } });
+        },
+
+        borrow: (amount) => {
+          const { player } = get();
+          const a = Math.min(amount, borrowLimit(player));
+          if (a <= 0) return;
+          set({ player: { ...player, cash: player.cash + a, debt: player.debt + a, mental: clamp(player.mental - 4, 0, 100), socialCredit: clamp(player.socialCredit - 3, 0, 100) } });
+        },
+
+        repay: (amount) => {
+          const { player } = get();
+          const a = Math.min(amount, player.debt, Math.max(0, player.cash));
+          set({ player: { ...player, cash: player.cash - a, debt: player.debt - a } });
+        },
+
         dismissNews: () => set((s) => ({ pendingNews: s.pendingNews.slice(1) })),
 
         resolveEvent: (choiceIndex) => {
-          const { player, pendingEventId, notices } = get();
+          const { player, pendingEventId, notices, flags, flagDates } = get();
           const event = pendingEventId ? getEvent(pendingEventId) : undefined;
           if (!event) return;
-          const choice = resolveChoices(event, eventContext(player))[choiceIndex];
-          const next = applyDelta(player, choice.effect);
+          const choice = resolveChoices(event, eventContext(player, flags, flagDates))[choiceIndex];
+          const next = settleCash(applyDelta(player, choice.effect), []);
+          const nextFlags = { ...flags };
+          const nextDates = { ...flagDates };
+          for (const [k, v] of Object.entries(choice.setFlags ?? {})) {
+            nextFlags[k] = (nextFlags[k] ?? 0) + v;
+            nextDates[k] = player.currentDate;
+          }
+          set({ flags: nextFlags, flagDates: nextDates });
           if (choice.endRun) {
             finishRun(next, choice.endRun);
             return;
@@ -457,7 +641,7 @@ export const useGameStore = create<GameState>()(
     },
     {
       name: 'slot-life-game',
-      version: 3,
+      version: 4,
       migrate: (persisted, version) => {
         const s = persisted as Partial<GameState> & { phase?: string };
         let state = s;
@@ -477,6 +661,23 @@ export const useGameStore = create<GameState>()(
             week: null,
             today: null,
             newsShownUntil: state.player?.currentDate ?? GAME_START_DATE,
+          };
+        }
+        // v3 は店が固定3軒。進行中の人生には新しい街（6軒）を与え、勝負日の途中なら週の方針決めに戻す
+        if (version < 4) {
+          const inDay = state.phase === 'FLOOR' || state.phase === 'PLAYING' || state.phase === 'LEDGER';
+          state = {
+            ...state,
+            phase: (inDay ? 'WEEK_PLAN' : state.phase) as Phase,
+            weekStart: inDay ? (state.player?.currentDate ?? GAME_START_DATE) : state.weekStart,
+            parlors: generateParlors(),
+            plan: null,
+            lastPlan: null,
+            today: null,
+            flags: {},
+            flagDates: {},
+            ending: null,
+            player: state.player ? { ...state.player, debt: state.player.debt ?? 0 } : state.player,
           };
         }
         return state as GameState;

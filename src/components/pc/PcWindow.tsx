@@ -7,6 +7,8 @@ import type { ActionType, DayLog, RunRecord } from '../../types';
 import { cn } from '../../utils/cn';
 import { dateLabel, num, signedYen } from '../../utils/format';
 import { Sheet, type Column } from './Sheet';
+import { ShopDataSheet, ShopStatsSheet } from './ShopSheets';
+import { endingTitle } from '../../data/endings';
 
 const ACTION_LABEL: Record<ActionType, string> = { SETTING: '設定狙い', HYENA: 'ハイエナ', TECH: '技術介入', REST: '休み' };
 
@@ -14,8 +16,15 @@ const ACTION_LABEL: Record<ActionType, string> = { SETTING: '設定狙い', HYEN
 const EV_COLOR = '#2a78d6';
 const ACTUAL_COLOR = '#eb6834';
 
-const TAB_LABEL: Record<PcTab, string> = { LEDGER: '収支表', CHART: 'グラフ', ANSWER: '答え合わせ', GRAVES: '墓標' };
-const FILE_NAME: Record<PcTab, string> = { LEDGER: '収支表.xls', CHART: '収支表.xls', ANSWER: '収支表.xls', GRAVES: 'これまでの人生.xls' };
+const TAB_LABEL: Record<PcTab, string> = { LEDGER: '収支表', CHART: 'グラフ', ANSWER: '答え合わせ', GRAVES: '墓標', SHOP_DATA: '店のデータ', SHOP_STATS: '店舗別' };
+const FILE_NAME: Record<PcTab, string> = {
+  LEDGER: '収支表.xls',
+  CHART: '収支表.xls',
+  ANSWER: '収支表.xls',
+  GRAVES: 'これまでの人生.xls',
+  SHOP_DATA: '店舗データ.xls',
+  SHOP_STATS: '店舗データ.xls',
+};
 
 const ledgerColumns: Column<DayLog>[] = [
   { header: '日付', cell: (l) => dateLabel(l.date) },
@@ -55,6 +64,7 @@ const graveColumns: Column<RunRecord>[] = [
   { header: '記帳EV計', align: 'right', cell: (r) => signedYen(r.totalEv), negative: (r) => r.totalEv < 0 },
   { header: '真のEV計', align: 'right', cell: (r) => signedYen(r.totalTrueEv), negative: (r) => r.totalTrueEv < 0 },
   { header: '実収支計', align: 'right', cell: (r) => signedYen(r.totalActual), negative: (r) => r.totalActual < 0 },
+  { header: '終わり方', cell: (r) => endingTitle(r.ending) },
   { header: '記憶', align: 'right', cell: (r) => `+${r.pointsEarned ?? 1}` },
   { header: '最期', cell: (r) => r.reason },
 ];
@@ -168,6 +178,8 @@ export function PcWindow({ tabs }: { tabs: PcTab[] }) {
             />
           )}
           {tab === 'GRAVES' && <Sheet columns={graveColumns} rows={[...runs].reverse()} />}
+          {tab === 'SHOP_DATA' && <ShopDataSheet />}
+          {tab === 'SHOP_STATS' && <ShopStatsSheet />}
         </div>
 
         {/* シートタブ */}

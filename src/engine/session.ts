@@ -63,6 +63,7 @@ export function advanceSession(session: PlaySession, hallMark: number, date: str
       expectedCoins: session.expectedCoins + mean,
       coinVariance: session.coinVariance + sd ** 2,
       lastCounts: {},
+      lastDiff: diff,
       log: [...session.log, `${clockLabel(session.clock)} 島を巡回 ${signedCoins(diff)}`],
     });
   }
@@ -78,6 +79,7 @@ export function advanceSession(session: PlaySession, hallMark: number, date: str
     games: session.games + games,
     counts,
     lastCounts: r.counts,
+    lastDiff: r.coinDiff,
     coinDiff: session.coinDiff + r.coinDiff,
     coinsInHand: session.coinsInHand + r.coinDiff,
     expectedCoins: session.expectedCoins + r.expectedCoins,

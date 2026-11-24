@@ -14,8 +14,8 @@ export const LEGACY_PERKS: LegacyPerk[] = [
   {
     id: 'PARLOR_HABIT',
     name: '店の癖',
-    description: '各店の据え置き傾向と、狙い日の本気度が分かる。',
-    cost: 2,
+    description: '各店の強い日・入れ方・告知の正直さが分かる。',
+    cost: 3,
   },
   {
     id: 'AUTO_JUDGE',

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ENDINGS } from '../../data/endings';
 import { LEGACY_PERKS } from '../../data/legacy';
 import { drawTraitChoices } from '../../data/traits';
 import { useGameStore } from '../../stores/useGameStore';
@@ -8,7 +9,7 @@ import { MessageWindow, type Choice } from '../game/MessageWindow';
 import { PcWindow } from '../pc/PcWindow';
 import { TitleScene } from '../scenes/TitleScene';
 
-type Step = 'menu' | 'legacy' | 'trait';
+type Step = 'menu' | 'legacy' | 'trait' | 'endings';
 
 export function TitlePhase() {
   const startRun = useGameStore((s) => s.startRun);
@@ -19,11 +20,13 @@ export function TitlePhase() {
   const openPc = useUiStore((s) => s.openPc);
   const [step, setStep] = useState<Step>('menu');
   const [traits, setTraits] = useState<ReturnType<typeof drawTraitChoices>>([]);
+  const seenEndings = new Set(runs.map((r) => r.ending ?? 'BANKRUPT'));
 
   const menu: Choice[] = [
     { label: '新しい人生を始める', onSelect: () => (setTraits(drawTraitChoices()), setStep('trait')) },
     { label: '前世の記憶', sub: `記憶 ${points}`, disabled: runs.length === 0, onSelect: () => setStep('legacy') },
     { label: 'これまでの人生（墓標）', sub: `${runs.length}件`, disabled: runs.length === 0, onSelect: () => openPc('GRAVES') },
+    { label: '人生の終わり方', sub: `${seenEndings.size} / ${ENDINGS.length}`, disabled: runs.length === 0, onSelect: () => setStep('endings') },
   ];
 
   let message;
@@ -34,6 +37,22 @@ export function TitlePhase() {
         text="会社を辞めた。……いや、そもそも自分は何者だったのか。"
         choices={traits.map((t) => ({ label: t.name, sub: t.description, onSelect: () => startRun(t.id) }))}
       />
+    );
+  } else if (step === 'endings') {
+    message = (
+      <>
+        <div className="game-window absolute top-[40px] left-8 z-10 w-[560px] px-6 py-4">
+          <div className="mb-2 text-[20px] text-amber-200">人生の終わり方</div>
+          <ul className="space-y-1 text-[19px]">
+            {ENDINGS.map((e) => (
+              <li key={e.id} className={seenEndings.has(e.id) ? 'text-neutral-100' : 'text-neutral-600'}>
+                {seenEndings.has(e.id) ? `・${e.title}` : '・？？？'}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <MessageWindow text="人生には、いくつかの終わり方がある。" choices={[{ label: '戻る', onSelect: () => setStep('menu') }]} />
+      </>
     );
   } else if (step === 'legacy') {
     message = (
@@ -86,7 +105,7 @@ export function TitlePhase() {
   return (
     <>
       <TitleScene />
-      <div className="absolute inset-x-0 top-[110px] text-center" hidden={step === 'legacy'}>
+      <div className="absolute inset-x-0 top-[110px] text-center" hidden={step === 'legacy' || step === 'endings'}>
         <div className="text-[22px] tracking-[0.4em] text-neutral-400">Loneliness of a Slot Pro: 2008-2026</div>
         <h1 className="mt-3 text-[64px] tracking-widest text-neutral-100" style={{ textShadow: '0 0 18px rgb(255 61 139 / 0.5)' }}>
           孤独なパチスロ専業の一生

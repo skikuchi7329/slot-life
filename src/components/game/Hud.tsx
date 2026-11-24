@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { getEnvironment } from '../../data/eras';
 import { getTrait } from '../../data/traits';
 import { useGameStore } from '../../stores/useGameStore';
 import { cn } from '../../utils/cn';
+import { isMuted, setMuted } from '../../utils/audio';
 import { clockLabel, dateLabel, num } from '../../utils/format';
 
 /** 10マスのゲージ */
@@ -28,6 +30,7 @@ export function Hud({ clock, date }: { clock: number; date?: string }) {
   const player = useGameStore((s) => s.player);
   const traitId = useGameStore((s) => s.traitId);
   const shownDate = date ?? player.currentDate;
+  const [muted, setMutedState] = useState(isMuted);
   const env = getEnvironment(shownDate);
 
   return (
@@ -50,8 +53,19 @@ export function Hud({ clock, date }: { clock: number; date?: string }) {
         <Meter label="社会信用" value={player.socialCredit} />
       </div>
 
-      <div className="ml-auto text-right leading-tight">
-        <div className="text-[14px] text-neutral-400">所持金</div>
+      <button
+        type="button"
+        onClick={() => (setMuted(!muted), setMutedState(!muted))}
+        className="ml-auto border border-neutral-700 px-2 text-[14px] text-neutral-400"
+      >
+        {muted ? '音 OFF' : '音 ON'}
+      </button>
+      <div className="text-right leading-tight">
+        <div className="text-[14px] text-neutral-400">
+          所持金
+          {player.bankSavings > 0 && <span className="ml-2">貯金 {num(player.bankSavings)}</span>}
+          {player.debt > 0 && <span className="ml-2 text-red-400">借金 {num(player.debt)}</span>}
+        </div>
         <div className={cn('text-[30px] tabular-nums', player.cash < 100_000 ? 'text-red-400' : 'text-neutral-100')}>
           {num(player.cash)}
           <span className="ml-1 text-[18px]">円</span>

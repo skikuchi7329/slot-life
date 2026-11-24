@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type PcTab = 'LEDGER' | 'CHART' | 'ANSWER' | 'GRAVES';
+export type PcTab = 'LEDGER' | 'CHART' | 'ANSWER' | 'GRAVES' | 'SHOP_DATA' | 'SHOP_STATS';
 
 interface UiState {
   pcTab: PcTab | null;

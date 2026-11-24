@@ -37,9 +37,9 @@ export const ERAS: Era[] = [
 const INITIAL_ENVIRONMENT: Omit<Environment, 'era'> = {
   exchangeRate: 20,
   eventsAllowed: true,
-  generosity: 1.1,
+  generosity: 1.25,
   crowdPressure: 0.15,
-  hyenaCoinsPerHour: 45,
+  hyenaCoinsPerHour: 20,
   priceIndex: 1.0,
   monthlyFixedCost: 95_000,
 };
@@ -50,13 +50,13 @@ export const REGULATION_NEWS: RegulationNews[] = [
     date: '2011-03-14',
     headline: '東日本大震災、関東のホールで節電営業',
     body: '計画停電でホールは短縮営業。客足が鈍り、店は設定を絞り始めた。',
-    apply: { generosity: 0.95 },
+    apply: { generosity: 1.05 },
   },
   {
     date: '2011-07-01',
     headline: '広告宣伝規制の強化 ― 告知イベント事実上禁止',
     body: '「○○の日」「全台系」の告知は消えた。以後、店の意図は来店演者や看板の色から読むしかない。',
-    apply: { eventsAllowed: false, generosity: 0.9 },
+    apply: { eventsAllowed: false, generosity: 1.0 },
   },
   {
     date: '2014-04-01',
@@ -68,7 +68,7 @@ export const REGULATION_NEWS: RegulationNews[] = [
     date: '2014-09-01',
     headline: '5.9号機の登場',
     body: 'ART純増に枷がはめられた。ハイエナで拾える期待値が目に見えて薄くなる。',
-    apply: { hyenaCoinsPerHour: 30 },
+    apply: { hyenaCoinsPerHour: 14 },
   },
   {
     date: '2015-06-01',
@@ -80,7 +80,7 @@ export const REGULATION_NEWS: RegulationNews[] = [
     date: '2018-02-01',
     headline: '改正遊技機規則施行 ― 6号機・有利区間2400枚',
     body: '一撃の上限が定められた。ホールの稼働は落ち、店は高設定を入れる余力を失っていく。',
-    apply: { generosity: 0.85, hyenaCoinsPerHour: 22 },
+    apply: { generosity: 0.9, hyenaCoinsPerHour: 10 },
   },
   {
     date: '2019-10-01',
@@ -110,13 +110,13 @@ export const REGULATION_NEWS: RegulationNews[] = [
     date: '2022-11-21',
     headline: 'スマスロ（メダルレス）導入開始',
     body: '出玉上限の撤廃に近い荒波。σは5号機の倍以上。抽選には見慣れない若い集団が並び始めた。',
-    apply: { crowdPressure: 0.55, hyenaCoinsPerHour: 15, generosity: 0.95 },
+    apply: { crowdPressure: 0.55, hyenaCoinsPerHour: 7, generosity: 1.0 },
   },
   {
     date: '2024-06-01',
     headline: '軍団とSNS収支報告の時代',
     body: '抽選番号は組織的に押さえられ、高設定の島は開店5分で埋まる。ハイエナ台はアプリで共有されている。',
-    apply: { crowdPressure: 0.75, hyenaCoinsPerHour: 9 },
+    apply: { crowdPressure: 0.75, hyenaCoinsPerHour: 4 },
   },
   {
     date: '2024-07-03',

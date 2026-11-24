@@ -71,3 +71,15 @@ body {
 .lamp {
   animation: lamp 1.2s ease-in-out infinite;
 }
+
+/* 激アツの虹色背景 */
+@keyframes rainbow {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+.rainbow-bg {
+  background: linear-gradient(90deg, #ff3b3b, #ff9f1a, #ffe83b, #3bff6e, #3bd8ff, #4a5bff, #c43bff);
+  opacity: 0.85;
+  animation: rainbow 0.9s linear infinite;
+}

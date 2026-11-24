@@ -99,27 +99,58 @@ export interface Machine {
 // ホール
 // ============================================================
 
-export type ParlorKind = 'BIG_EVENT' | 'MID_QUIET' | 'SPECIAL_DAY';
+export type ParlorSize = 'BIG' | 'MID' | 'SMALL';
 
-export interface Parlor {
+/** 店の「強い日」の決まり（プレイヤーには見えない。データと告知から推理する） */
+export type StrongDayRule =
+  | { kind: 'TAIL'; digit: number } // 末尾の日（7のつく日など）
+  | { kind: 'ZOROME' } // 11日・22日
+  | { kind: 'WEEKDAY'; day: number } // 毎週○曜日
+  | { kind: 'MONTH_START' } // 月初1日
+  | { kind: 'NONE' };
+
+/** 強い日の高設定の入れ方 */
+export type Placement = 'ALL_MODEL' | 'LINE' | 'TAIL_NUMBER' | 'CORNER' | 'SCATTER';
+
+/**
+ * 人生ごとにランダムに生成される店。癖（強い日・入れ方・据え置き・凹み上げ・告知の正直さ・軍団との癒着）は隠れている
+ */
+export interface ParlorProfile {
   id: string;
   name: string;
-  kind: ParlorKind;
+  size: ParlorSize;
+  /** 誰でも知っている表向きの評判 */
   description: string;
   unitCount: number;
-  /** 通常日の並び人数（基準） */
   baseQueue: number;
-  /** 通常日の設定配分（設定1〜6の重み） */
-  normalWeights: [number, number, number, number, number, number];
-  /** 狙い日の設定配分 */
-  eventWeights: [number, number, number, number, number, number];
-  /** その日が狙い日か */
-  isEventDay: (date: Date) => boolean;
-  /** 前日設定の据え置き率 */
+  /** 通常日に高設定（4〜6）が入る台の割合 */
+  normalHighRate: number;
+  strongDay: StrongDayRule;
+  /** 強い日に高設定が入る台の割合（入れ方が SCATTER のとき） */
+  strongHighRate: number;
+  placement: Placement;
+  /** 前日の設定の据え置き率 */
   carryOverRate: number;
+  /** 前日いちばん凹んだ台の設定を上げる癖 */
+  dentedRaise: boolean;
+  /** 告知・匂わせが本当である確率（低い店は煽るだけ） */
+  honesty: number;
+  /** 軍団と癒着している（高設定は抽選で先に軍団へ流れる） */
+  gundanTie: boolean;
 }
 
-/** データカウンターに表示される前日データ */
+/** 店からの告知・匂わせ（その日の入れ方を示す、ことになっている） */
+export interface ParlorNotice {
+  /** どこで見たか（看板・ブログ・X・取材） */
+  medium: string;
+  text: string;
+  /** 示している入れ方と機種（嘘の場合もある） */
+  placement: Placement;
+  machineId?: string;
+  digit?: number;
+}
+
+/** データカウンターに表示されるデータ */
 export interface CounterData {
   games: number;
   counts: Record<string, number>;
@@ -131,8 +162,22 @@ export interface FloorUnit {
   machineId: string;
   /** 真の設定。プレイヤーには見えない */
   setting: number;
+  /** 島の端（角台） */
+  corner: boolean;
   yesterday: CounterData;
   takenBy: 'NONE' | 'OTHER' | 'PLAYER';
+  /** 他の客がその日に打ち切ったときの最終データ（プレイヤーには時刻に応じた途中経過しか見えない） */
+  closing: CounterData;
+  /** 他の客が席を立つ時刻（分）。以降は空き台（ヤメ台）になる */
+  quitAt: number;
+}
+
+/** 閉店後のデータ（店ごとに保存し、PCで見返す） */
+export interface DaySnapshot {
+  date: string;
+  notice: string | null;
+  /** [台番, 機種番号, G数, ボーナス1, ボーナス2, 差枚] */
+  units: [number, number, number, number, number, number][];
 }
 
 // ============================================================
@@ -147,7 +192,11 @@ export type Phase = 'TITLE' | 'WEEK_PLAN' | 'FLOOR' | 'PLAYING' | 'LEDGER' | 'WE
 
 export type Lifestyle = 'COOK' | 'CONVENIENCE' | 'SENTO';
 
-export type WorkStyle = 'SETTING' | 'HYENA';
+/** おまかせ稼働の台の選び方（プレイヤーが推理した店の癖を反映する） */
+export type PickRule = 'NOTICE' | 'CARRY' | 'DENTED' | 'CORNER' | 'TAIL';
+
+/** SETTING: 毎日設定狙い / TARGET: 告知・狙い日だけ設定狙い、他の日はハイエナ / HYENA: ハイエナ中心 */
+export type WorkStyle = 'SETTING' | 'TARGET' | 'HYENA';
 
 /** 週の方針 */
 export interface WeekPlan {
@@ -155,6 +204,8 @@ export interface WeekPlan {
   /** おまかせ稼働で通う店 */
   parlorId: string;
   style: WorkStyle;
+  /** おまかせで台を選ぶときの狙い方 */
+  pickRule: PickRule;
   /** 勝負日を含む稼働日数 */
   workDays: 5 | 6 | 7;
   /** 手動で打つ勝負日（なしなら全日おまかせ） */
@@ -186,6 +237,8 @@ export interface PlaySession {
   counts: Record<string, number>;
   /** 直近1時間の役の成立回数（ランプ演出用） */
   lastCounts: Record<string, number>;
+  /** 直近1時間の差枚（上振れ演出用） */
+  lastDiff?: number;
   /** 差枚（実測） */
   coinDiff: number;
   /** 手持ちの遊技メダル */
@@ -205,10 +258,22 @@ export interface Today {
   parlorId: string;
   lotteryNumber: number;
   queueSize: number;
-  isEventDay: boolean;
+  /** 今日の告知・匂わせ */
+  notice: ParlorNotice | null;
   floor: FloorUnit[];
   session: PlaySession | null;
+  /** 台移動する前に打っていたセッション */
+  pastSessions: PlaySession[];
+  /** 打っている最中に起きた出来事（選択待ち） */
+  floorEvent: FloorEvent | null;
 }
+
+/** 勝負日に打っている最中に起きる出来事 */
+export type FloorEvent =
+  | { kind: 'YAME'; unitNo: number } // 島の台が空いた
+  | { kind: 'NEIGHBOR_CONFIRM'; unitNo: number; label: string; meaning: string } // 隣が確定演出を出して席を立った
+  | { kind: 'BUYOUT'; price: number } // 軍団に台を売ってくれと言われる
+  | { kind: 'STAFF' }; // 店員が台番をメモしている
 
 export interface DayLog {
   date: string;
@@ -242,6 +307,7 @@ export interface PlayerStats {
   hallMark: number; // 店マーク度 (0-100)
   socialCredit: number; // 社会信用度 (0-100)
   currentDate: string; // YYYY-MM-DD
+  debt: number; // 消費者金融からの借入残高
 }
 
 
@@ -267,13 +333,19 @@ export interface EventChoice {
   effect: StatDelta;
   result: string;
   /** 選ぶと人生が終わる（足を洗う等） */
-  endRun?: string;
+  endRun?: { ending: EndingId; text: string };
+  /** 物語の進行フラグを加算する */
+  setFlags?: Record<string, number>;
 }
 
 export interface EventContext {
   player: PlayerStats;
   date: Date;
   env: Environment;
+  /** 物語の進行フラグ（例: father=1 は父が入院した） */
+  flags: Record<string, number>;
+  /** フラグが立った日（例: father → 2013-05-01） */
+  flagDates: Record<string, string>;
 }
 
 export interface GameEvent {
@@ -300,6 +372,24 @@ export interface RunRecord {
   reason: string;
   /** この人生で得た記憶ポイント */
   pointsEarned: number;
+  ending: EndingId;
+}
+
+/** 人生の終わり方 */
+export type EndingId =
+  | 'BANKRUPT' // 破産
+  | 'BROKEN_BODY' // 体が壊れる
+  | 'BROKEN_MIND' // 心が折れる
+  | 'JOB' // 足を洗って就職
+  | 'HALL_STAFF' // ホール店員になる
+  | 'GUNDAN' // 軍団に入る
+  | 'HOMETOWN' // 実家に帰る
+  | 'SURVIVOR' // 2026年まで打ち続けた
+  | 'LEGEND'; // 2026年まで打ち続け、大きく勝ち越した
+
+export interface Ending {
+  id: EndingId;
+  title: string;
 }
 
 /** 人生をまたいで引き継ぐ知識（前世の記憶） */

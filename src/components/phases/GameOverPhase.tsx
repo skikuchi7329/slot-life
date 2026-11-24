@@ -1,3 +1,4 @@
+import { endingTitle } from '../../data/endings';
 import { useGameStore } from '../../stores/useGameStore';
 import { useLogStore } from '../../stores/useLogStore';
 import { useUiStore } from '../../stores/useUiStore';
@@ -10,6 +11,7 @@ import { RoomScene } from '../scenes/RoomScene';
 export function GameOverPhase() {
   const player = useGameStore((s) => s.player);
   const reason = useGameStore((s) => s.gameOverReason);
+  const ending = useGameStore((s) => s.ending);
   const backToTitle = useGameStore((s) => s.backToTitle);
   const logs = useLogStore((s) => s.logs);
   const openPc = useUiStore((s) => s.openPc);
@@ -24,6 +26,7 @@ export function GameOverPhase() {
       <div className="absolute inset-0 bg-black/85" />
       <div className="absolute inset-x-0 top-[120px] text-center">
         <div className="text-[20px] tracking-[0.5em] text-neutral-500">{player.currentDate.replaceAll('-', '.')}</div>
+        <div className="mt-2 text-[40px] tracking-widest text-neutral-100">{endingTitle(ending ?? undefined)}</div>
         <div className="mt-6 grid grid-cols-3 gap-6 px-40 text-[20px] tabular-nums">
           <div>
             <div className="text-[15px] text-neutral-500">記帳していた期待値</div>
