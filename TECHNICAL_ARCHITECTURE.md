@@ -9,6 +9,7 @@ Claude Code ProPlanの自律実装に最適化し、外部依存を最小限に�
 * **State Management**: Zustand (永続化: `persist` ミドルウェアでLocalStorage保存)
 * **Audio**: Web Audio API（シンセサイズによるSE生成、またはフリー音源）
 * **Data Visualization**: Recharts（収支グラフ、期待値乖離グラフの描画）
+* **Hosting**: GitHub Pages（`main` へのプッシュで GitHub Actions が lint → build → 公開。`.github/workflows/deploy.yml`、本番の `base` は `/slot-life/`。ADR-024）
 
 ## 2. ディレクトリ構成
 

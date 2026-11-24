@@ -250,6 +250,16 @@
 - **結果**: おまかせだけ（勝負日なし）では、良い店・合った狙い方でも1〜2年で資金が尽きる。勝負日に癖を読んで勝てれば生活費を賄える計算（強い日の最善台で+3.6万円/日）。プレイヤーが関与しないと生き残れない緊張感を狙っている
 - **影響**: `src/data/eras.ts`、`src/engine/floor.ts`、`src/engine/autoplay.ts`、`useGameStore`（`runDays`）
 
+## ADR-024 公開先は GitHub Pages（main へのプッシュで自動デプロイ）
+
+- 日付: 2026-11-25 / 状態: 採用
+- **背景**: 遊んでもらえる形で公開したい。サーバー処理はなく、ビルド結果は静的ファイルだけ、セーブは LocalStorage。
+- **決定**: GitHub Actions（`.github/workflows/deploy.yml`）で `main` へのプッシュごとに lint → build → GitHub Pages へ公開する。公開URLは `https://skikuchi7329.github.io/slot-life/`。URLにリポジトリ名が付くため、`vite.config.ts` で本番ビルド時のみ `base: '/slot-life/'` にする（開発時は `/` のまま）。
+- **理由・却下した代替案**:
+  - Vercel / Cloudflare Pages：PRごとのプレビューURL、サーバー処理の追加余地、短いURLが利点。ただし現段階は一人で開発しており不要で、アカウントが増えるだけ。ユーザーと相談して GitHub Pages に決めた
+  - 将来ランキングやクラウドセーブなどサーバー処理が必要になったら、Vercel / Cloudflare への移行を検討する。ゲーム側の変更は `base` 程度で済む
+- **影響**: `vite.config.ts`、`.github/workflows/deploy.yml`。リポジトリは PUBLIC のため、ソースと設計ドキュメントも公開される。LocalStorage は `skikuchi7329.github.io` のオリジン単位なので、同じ github.io 上の別リポジトリのページとはキー名（`slot-life-*`）で衝突を避けている
+
 ---
 
 ## 保留中の論点・次にやること
