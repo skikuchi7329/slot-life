@@ -3,7 +3,7 @@ import { getEnvironment } from '../../data/eras';
 import { getEvent, resolveChoices, resolveText } from '../../data/events';
 import { describeHabit } from '../../data/parlors';
 import { noticeFor } from '../../engine/floor';
-import { eventContext, LIFESTYLE_LIST, lifestyleCost, useGameStore, weekDates } from '../../stores/useGameStore';
+import { eventContext, gearOf, LIFESTYLE_LIST, lifestyleCost, useGameStore, weekDates } from '../../stores/useGameStore';
 import { hasPerk } from '../../stores/useRunStore';
 import { useUiStore } from '../../stores/useUiStore';
 import type { Lifestyle, ParlorNotice, PickRule, WeekPlan, WorkStyle } from '../../types';
@@ -42,6 +42,8 @@ export function WeekPlanPhase() {
   const notices = useGameStore((s) => s.notices);
   const flags = useGameStore((s) => s.flags);
   const flagDates = useGameStore((s) => s.flagDates);
+  const inventory = useGameStore((s) => s.inventory);
+  const crew = useGameStore((s) => s.crew);
   const news = useGameStore((s) => s.pendingNews[0]);
   const eventId = useGameStore((s) => s.pendingEventId);
   const dismissNews = useGameStore((s) => s.dismissNews);
@@ -124,7 +126,11 @@ export function WeekPlanPhase() {
         choices={[
           ...parlors.map((p) => ({
             label: p.name,
-            sub: habit ? describeHabit(p) : `${{ BIG: '大型', MID: '中型', SMALL: '小型' }[p.size]}・並び約${p.baseQueue}人`,
+            sub: habit
+              ? describeHabit(p)
+              : inventory.knownHabits[p.id]
+                ? `note：${inventory.knownHabits[p.id]}`
+                : `${{ BIG: '大型', MID: '中型', SMALL: '小型' }[p.size]}・並び約${p.baseQueue}人`,
             onSelect: () => go({ parlorId: p.id }, 'style'),
           })),
           pcChoice,
@@ -140,7 +146,7 @@ export function WeekPlanPhase() {
           { label: '狙い日だけ設定狙い', sub: '告知のない日はハイエナ', onSelect: () => go({ style: 'TARGET' }, 'pick') },
           {
             label: 'ハイエナ中心',
-            sub: `店マーク↑ 時給目安${Math.round(env.hyenaCoinsPerHour * env.exchangeRate)}円`,
+            sub: `店マーク↑ 時給目安${Math.round(env.hyenaCoinsPerHour * gearOf(inventory, player.currentDate).hyenaBoost * env.exchangeRate)}円`,
             onSelect: () => go({ style: 'HYENA', pickRule: 'NOTICE' }, 'days'),
           },
         ]}
@@ -174,7 +180,8 @@ export function WeekPlanPhase() {
     }));
     if (regular) options.push({ label: `${short(dates[6])} ${regular.name}`, sub: '週末にいつもの店で', onSelect: () => commit({ date: dates[6], parlorId: regular.id }) });
     options.push({ label: '勝負日は作らない', sub: '全日おまかせ', onSelect: () => commit(null) });
-    message = <MessageWindow text="勝負日は？（自分の目で台を選び、判断する日）" choices={options} />;
+    const crewNote = crew.pullers + crew.runners.length > 0 ? `\n引き子${crew.pullers}人・打ち子${crew.runners.length}人を連れていく。` : '';
+    message = <MessageWindow text={`勝負日は？（自分の目で台を選び、判断する日）${crewNote}`} choices={options} />;
   }
 
   const showNotices = !news && !event && (step === 'menu' || step === 'shoubu');

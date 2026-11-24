@@ -44,21 +44,29 @@ function DataCounter({ machine, session }: { machine: Machine; session: PlaySess
   );
 }
 
-/** 手元の小役カウンター（通称カチカチ君） */
-function HandCounter({ machine, session }: { machine: Machine; session: PlaySession }) {
+/** 手元の小役カウンター（通称カチカチ君）。持っていなければ、小役は目で追うだけ */
+function HandCounter({ machine, session, owned }: { machine: Machine; session: PlaySession; owned: boolean }) {
+  const data = new Set(counterFlags(machine).map((f) => f.key));
   return (
     <div className="absolute top-[150px] left-8 z-10 w-[310px] rounded-2xl border-4 border-[#2b2b2b] bg-[#5b5f68] p-3 shadow-[6px_6px_0_rgb(0_0_0/0.5)]">
-      <div className="mb-2 text-center text-[15px] text-neutral-200">小役カウンター</div>
-      <div className="space-y-1.5 rounded bg-[#9fae8f] p-2 text-[#1c2416]">
-        {handCounterFlags(machine).map((f) => (
-          <div key={f.key} className="flex justify-between text-[19px] tabular-nums">
-            <span className="truncate">{f.label}</span>
-            <span className="shrink-0">
-              {session.counts[f.key] ?? 0}
-              <span className="ml-2 text-[15px]">{odds(session.counts[f.key] ?? 0, session.games)}</span>
-            </span>
-          </div>
-        ))}
+      <div className="mb-2 text-center text-[15px] text-neutral-200">{owned ? '小役カウンター' : '手元のメモ（カウンターなし）'}</div>
+      <div className={cn('space-y-1.5 rounded p-2', owned ? 'bg-[#9fae8f] text-[#1c2416]' : 'bg-[#3a3d44] text-neutral-300')}>
+        {handCounterFlags(machine).map((f) =>
+          owned || data.has(f.key) ? (
+            <div key={f.key} className="flex justify-between text-[19px] tabular-nums">
+              <span className="truncate">{f.label}</span>
+              <span className="shrink-0">
+                {session.counts[f.key] ?? 0}
+                <span className="ml-2 text-[15px]">{odds(session.counts[f.key] ?? 0, session.games)}</span>
+              </span>
+            </div>
+          ) : (
+            <div key={f.key} className="flex justify-between text-[19px] text-neutral-500">
+              <span className="truncate">{f.label}</span>
+              <span className="shrink-0 text-[15px]">数えていない</span>
+            </div>
+          ),
+        )}
       </div>
       <div className="mt-2 flex justify-between text-[15px] text-neutral-200 tabular-nums">
         <span>持ちメダル {num(session.coinsInHand)}枚</span>
@@ -75,9 +83,10 @@ function hintNote(f: Flag, insight: boolean): string {
 }
 
 /** 自作の判別メモ（方眼ノート）。判別ツールの事後確率と、見た示唆の記録 */
-function Notebook({ machine, session, rate }: { machine: Machine; session: PlaySession; rate: number }) {
+function Notebook({ machine, session, rate, handCounter }: { machine: Machine; session: PlaySession; rate: number; handCounter: boolean }) {
   const insight = hasPerk('HINT_INSIGHT');
-  const posterior = session.games > 0 ? settingPosterior(machine, session.games, session.counts) : [1, 1, 1, 1, 1, 1].map(() => 1 / 6);
+  const posterior =
+    session.games > 0 ? settingPosterior(machine, session.games, session.counts, undefined, handCounter) : [1, 1, 1, 1, 1, 1].map(() => 1 / 6);
   const hourly = posterior.reduce((a, p, i) => a + p * expectedCoinsPerGame(machine, i + 1), 0) * machine.gamesPerHour * rate;
   const seen = noteFlags(machine).filter((f) => (session.counts[f.key] ?? 0) > 0);
   return (
@@ -233,7 +242,19 @@ function WalkView({ today, session, seed, onBack }: { today: Today; session: Pla
       <Hud clock={t} />
       {today.notice && <NoticeCard medium={today.notice.medium} text={today.notice.text} />}
       {panel && (
-        <UnitStrip unit={panel} today={panelToday} status={panel.unitNo === session.unitNo ? '自分の台' : isFree(panel, t) ? '空き' : '着席中'} />
+        <UnitStrip
+          unit={panel}
+          today={panelToday}
+          status={
+            panel.unitNo === session.unitNo
+              ? '自分の台'
+              : today.runnerShifts?.some((x) => x.unitNo === panel.unitNo) && !isFree(panel, t)
+                ? '打ち子'
+                : isFree(panel, t)
+                  ? '空き'
+                  : '着席中'
+          }
+        />
       )}
       {target ? (
         <MessageWindow
@@ -256,9 +277,11 @@ function WalkView({ today, session, seed, onBack }: { today: Today; session: Pla
 export function PlayPhase() {
   const today = useGameStore((s) => s.today);
   const date = useGameStore((s) => s.player.currentDate);
+  const handCounter = useGameStore((s) => s.inventory.owned.includes('HAND_COUNTER'));
   const playHour = useGameStore((s) => s.playHour);
   const playToClose = useGameStore((s) => s.playToClose);
   const endSession = useGameStore((s) => s.endSession);
+  const switchToHyena = useGameStore((s) => s.switchToHyena);
   // 見終えた演出（台番と時間の組で管理する。台を移ると記録がリセットされるため）
   const [seenPremium, setSeenPremium] = useState('');
   const [seenHit, setSeenHit] = useState('');
@@ -279,7 +302,12 @@ export function PlayPhase() {
     : [
         { label: machine ? '1時間回す' : '1時間巡回する', onSelect: playHour },
         { label: `閉店（${clockLabel(CLOSE_TIME)}）まで${machine ? '回す' : '粘る'}`, sub: machine ? '何か起きたら止まる' : undefined, onSelect: playToClose },
-        ...(machine ? [{ label: '島を見て回る', sub: '空き台に移れる', onSelect: () => setWalking(true) }] : []),
+        ...(machine
+          ? [
+              { label: '島を見て回る', sub: '空き台に移れる', onSelect: () => setWalking(true) },
+              { label: '見切ってハイエナに切り替える', sub: '店マーク↑', onSelect: switchToHyena },
+            ]
+          : []),
         { label: 'ヤメて精算する', onSelect: endSession },
       ];
 
@@ -333,8 +361,8 @@ export function PlayPhase() {
       <MachineScene type={machine.type} neighborTypes={neighborTypes(s.unitNo ?? 0)} lampOn={hit && machine.type === 'A_TYPE'} />
       <Hud clock={s.clock} />
       <DataCounter machine={machine} session={s} />
-      <HandCounter machine={machine} session={s} />
-      <Notebook machine={machine} session={s} rate={env.exchangeRate} />
+      <HandCounter machine={machine} session={s} owned={handCounter} />
+      <Notebook machine={machine} session={s} rate={env.exchangeRate} handCounter={handCounter} />
       {overlay}
     </>
   );

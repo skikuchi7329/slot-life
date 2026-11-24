@@ -260,6 +260,17 @@ export function drawLotteryNumber(queueSize: number): number {
   return randInt(1, queueSize);
 }
 
+/**
+ * 引き子・打ち子と一緒に並んだときの抽選番号（重複なし・若い順）。
+ * 若い番号を自分が使い、次の番号から打ち子に回す
+ */
+export function drawLotteryNumbers(queueSize: number, people: number): number[] {
+  const n = Math.min(people, queueSize);
+  const picked = new Set<number>();
+  while (picked.size < n) picked.add(randInt(1, queueSize));
+  return [...picked].sort((a, b) => a - b);
+}
+
 /** 告知の入れ方に合う台か */
 export function matchesNotice(notice: ParlorNotice | null, u: FloorUnit): boolean {
   if (!notice) return false;
@@ -282,7 +293,18 @@ export function matchesNotice(notice: ParlorNotice | null, u: FloorUnit): boolea
  */
 export function applyLottery(floor: FloorUnit[], lotteryNumber: number, env: Environment, parlor: ParlorProfile, notice: ParlorNotice | null): FloorUnit[] {
   const result = floor.map((u) => ({ ...u }));
-  const takers = Math.min(result.length, Math.round((lotteryNumber - 1) * SLOT_TARGET_SHARE));
+  takeUnits(result, lotteryNumber - 1, env, parlor, notice);
+  return result;
+}
+
+/** 抽選番号 from〜to の間の客が台を取っていく（打ち子の番号までに取られる台） */
+export function takeUnitsBetween(floor: FloorUnit[], from: number, to: number, env: Environment, parlor: ParlorProfile, notice: ParlorNotice | null) {
+  takeUnits(floor, to - from - 1, env, parlor, notice);
+}
+
+/** people 人の客が順に台を取る（floor を直接書き換える） */
+function takeUnits(result: FloorUnit[], people: number, env: Environment, parlor: ParlorProfile, notice: ParlorNotice | null) {
+  const takers = Math.min(result.length, Math.round(Math.max(0, people) * SLOT_TARGET_SHARE));
   const informedRate = clamp(env.crowdPressure + (parlor.gundanTie ? 0.3 : 0), 0, 0.95);
   for (let i = 0; i < takers; i++) {
     const free = result.filter((u) => u.takenBy === 'NONE');
@@ -296,7 +318,6 @@ export function applyLottery(floor: FloorUnit[], lotteryNumber: number, env: Env
     target.quitAt = quitTimeFor(target.setting, start);
     target.closing = playedData(target.machineId, target.setting, start, target.quitAt);
   }
-  return result;
 }
 
 /** 時刻 t に空いている台か（最初から空き、または他の客が席を立った後） */

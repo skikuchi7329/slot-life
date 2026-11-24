@@ -75,16 +75,26 @@ export function simulateGames(machine: Machine, setting: number, games: number):
 }
 
 /**
+ * 判別に使える役。データカウンターに出るボーナス・AT初当りと、目で見える示唆・プレミアはいつでも数えられる。
+ * ブドウ等の小役は、小役カウンターを持っているときだけ数えられる（ADR-025）。
+ */
+export function judgedFlags(machine: Machine, handCounter: boolean) {
+  return machine.flags.filter(
+    (f) => f.countable && f.published !== false && (handCounter || (f.kind ?? 'NORMAL') !== 'NORMAL' || f.payout > 8),
+  );
+}
+
+/**
  * 小役カウンター・示唆の数値から設定ごとの事後確率を求める。
  * 専業がExcelで回している判別ツールと同じ二項尤度ベースの計算。
  * 解析で確率が判明していない「噂」の示唆（published: false）は入らない。
- * prior を省略すると一様事前分布（記帳用の判別ツールはこちら。ADR-007）。
+ * prior を省略（undefined）すると一様事前分布（記帳用の判別ツールはこちら。ADR-007）。
  */
-export function settingPosterior(machine: Machine, games: number, counts: Record<string, number>, prior?: number[]): number[] {
+export function settingPosterior(machine: Machine, games: number, counts: Record<string, number>, prior?: number[], handCounter = true): number[] {
+  const flags = judgedFlags(machine, handCounter);
   const logLik = [1, 2, 3, 4, 5, 6].map(
     (s) =>
-      machine.flags
-        .filter((f) => f.countable && f.published !== false)
+      flags
         .reduce((acc, f) => acc + binomialLogLik(counts[f.key] ?? 0, games, 1 / f.denominators[s - 1]), 0) +
       (prior ? Math.log(prior[s - 1]) : 0),
   );
@@ -106,8 +116,8 @@ export interface CounterEstimate {
  * 判別ツールの事後確率で各設定の期待差枚・分散を重み付けする。
  * 一様事前分布のため、データが少ないほど高設定側に楽観的になる。
  */
-export function estimateFromCounters(machine: Machine, games: number, counts: Record<string, number>): CounterEstimate {
-  const posterior = settingPosterior(machine, games, counts);
+export function estimateFromCounters(machine: Machine, games: number, counts: Record<string, number>, handCounter = true): CounterEstimate {
+  const posterior = settingPosterior(machine, games, counts, undefined, handCounter);
   return posterior.reduce<CounterEstimate>(
     (acc, p, i) => ({
       expectedCoins: acc.expectedCoins + p * expectedCoinsPerGame(machine, i + 1) * games,

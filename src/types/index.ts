@@ -223,6 +223,8 @@ export interface WeekSummary {
   highlights: string[];
   /** 月初の引き落としなど */
   notices: string[];
+  /** 引き子・打ち子の日当の合計 */
+  crewCost?: number;
 }
 
 export type ActionType = 'SETTING' | 'HYENA' | 'TECH' | 'REST';
@@ -266,6 +268,28 @@ export interface Today {
   pastSessions: PlaySession[];
   /** 打っている最中に起きた出来事（選択待ち） */
   floorEvent: FloorEvent | null;
+  /** 引き子・打ち子と並んで引いた抽選番号（若い順。先頭が自分） */
+  lotteries?: number[];
+  /** 打ち子の割り当てと、その稼働（帰した打ち子は unitNo が null） */
+  runnerShifts?: RunnerShift[];
+}
+
+/**
+ * 打ち子への指示。CLOSE: 閉店まで打ち切る / HOME: 見切ったら帰る / HYENA: 見切ったらハイエナに切り替える
+ * （台を渡さずに HYENA なら、最初からハイエナで巡回する）
+ */
+export type RunnerOrder = 'CLOSE' | 'HOME' | 'HYENA';
+
+/** 勝負日の打ち子の1日 */
+export interface RunnerShift {
+  runnerId: string;
+  name: string;
+  lottery: number;
+  /** 打たせた台（ハイエナだけ・帰した打ち子は null） */
+  unitNo: number | null;
+  order?: RunnerOrder;
+  /** 稼働の記帳（閉店後に持ち逃げされていなければ自分の記帳にまとめる） */
+  log: DayLog | null;
 }
 
 /** 勝負日に打っている最中に起きる出来事 */
@@ -308,6 +332,86 @@ export interface PlayerStats {
   socialCredit: number; // 社会信用度 (0-100)
   currentDate: string; // YYYY-MM-DD
   debt: number; // 消費者金融からの借入残高
+}
+
+// ============================================================
+// 買い物と人（道具・情報・打ち子／引き子）
+// ============================================================
+
+/**
+ * 買えるもの。実在する道具・サービスに準えたもの
+ * - PERMANENT: 一度買えば人生の終わりまで使える道具
+ * - SUBSCRIPTION: 月初に会費が引き落とされる（解約できる）
+ * - CONSUMABLE: 買ったその場で効く、または一定期間だけ効く
+ */
+export type ItemKind = 'PERMANENT' | 'SUBSCRIPTION' | 'CONSUMABLE';
+
+export type ItemId =
+  | 'HAND_COUNTER' // 小役カウンター
+  | 'CUSHION' // ゲルクッション
+  | 'NC_EARPHONES' // ノイズキャンセリングイヤホン
+  | 'DATA_SITE' // データサイトの有料会員
+  | 'MAGAZINE' // 攻略誌
+  | 'HYENA_NOTE' // 有料note（天井・ゾーンの狙い目）
+  | 'SHOP_NOTE' // 有料note（地域ホールの傾向）
+  | 'ENERGY_DRINK'; // 栄養ドリンク
+
+export interface ShopItem {
+  id: ItemId;
+  kind: ItemKind;
+  /** 時代によって名前が変わる（有料メルマガ → 有料note など） */
+  name: (date: string) => string;
+  description: string;
+  /** 2008年時点の価格。物の値段には物価指数が掛かる。会費は月額 */
+  price: number;
+  /** 物価指数を掛けるか（ネットの会費・noteは据え置き） */
+  inflates: boolean;
+  /** 買えるようになる日 */
+  from?: string;
+  /** 効き目が続く週数（CONSUMABLE のうち期間ものだけ） */
+  weeks?: number;
+}
+
+/** 持ち物と、期間ものの効き目 */
+export interface Inventory {
+  /** 持っている道具と、契約中の会員 */
+  owned: ItemId[];
+  /** 期間ものの効き目が切れる日（その日を含まない） */
+  until: Partial<Record<ItemId, string>>;
+  /** 有料noteの中身の濃さ（ハイエナの期待値に掛かる倍率） */
+  hyenaNoteBoost: number;
+  /** 有料noteで知った店の傾向（店ID → 書いてあったこと。外れていることもある） */
+  knownHabits: Record<string, string>;
+}
+
+/** 打ち子。軍資金を預けて、自分の指示どおりに打たせる */
+export interface Runner {
+  id: string;
+  name: string;
+  /** 預けている軍資金 */
+  float: number;
+  /** 律儀さ（0〜1、見えない）。低いほど持ち逃げしやすい */
+  loyalty: number;
+  /** 雇った日 */
+  since: string;
+}
+
+export interface Crew {
+  /** 引き子の人数（抽選を一緒に引き、良い番号を回してもらう） */
+  pullers: number;
+  runners: Runner[];
+}
+
+/** 稼働に効く道具・情報の状態（エンジンに渡す） */
+export interface Gear {
+  /** 小役カウンターがある（ブドウ等の小役を数えられる） */
+  handCounter: boolean;
+  /** ハイエナの期待値の倍率（攻略誌・有料note） */
+  hyenaBoost: number;
+  /** 1日の体力の削れを減らす量 */
+  healthGuard: number;
+  /** 1日の精神の削れを減らす量 */
+  mentalGuard: number;
 }
 
 

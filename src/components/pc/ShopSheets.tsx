@@ -41,6 +41,7 @@ export function ShopDataSheet() {
   const parlors = useGameStore((s) => s.parlors);
   const today = useGameStore((s) => s.player.currentDate);
   const data = useShopDataStore((s) => s.data);
+  const site = useGameStore((s) => s.inventory.owned.includes('DATA_SITE'));
   // 最初は、いちばん新しいデータがある店を開く（たいていは今日行った店）
   const [parlorId, setParlorId] = useState(
     () => [...parlors].sort((a, b) => (data[b.id]?.[0]?.date ?? '').localeCompare(data[a.id]?.[0]?.date ?? ''))[0]?.id ?? '',
@@ -55,7 +56,12 @@ export function ShopDataSheet() {
       <div className="flex flex-wrap gap-1 bg-[#ece9e2] p-1 text-[12px]">
         {days.length === 0 && (
           <span className="px-2 text-[#555]">
-            記録がない。{today < DATA_SITE_DATE ? 'この時代は、自分が行った日のデータしか残らない。' : ''}
+            記録がない。
+            {today < DATA_SITE_DATE
+              ? 'この時代は、自分が行った日のデータしか残らない。'
+              : site
+                ? ''
+                : 'データサイトの有料会員になれば、行かなかった店のデータも見られる。'}
           </span>
         )}
         {days.map((d) => (

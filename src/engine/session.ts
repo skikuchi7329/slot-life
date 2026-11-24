@@ -43,8 +43,8 @@ function topUp(session: PlaySession): PlaySession {
   return { ...session, coinsInHand: session.coinsInHand + units * COINS_PER_1000_YEN, cashInvested: session.cashInvested + units * 1000 };
 }
 
-/** 1時間（閉店間際は残り時間）だけ遊技を進める */
-export function advanceSession(session: PlaySession, hallMark: number, date: string): PlaySession {
+/** 1時間（閉店間際は残り時間）だけ遊技を進める。hyenaBoost は攻略誌・有料noteの効き目 */
+export function advanceSession(session: PlaySession, hallMark: number, date: string, hyenaBoost = 1): PlaySession {
   const env = getEnvironment(date);
   const minutes = Math.min(60, CLOSE_TIME - session.clock);
   if (minutes <= 0) return session;
@@ -52,7 +52,7 @@ export function advanceSession(session: PlaySession, hallMark: number, date: str
   if (session.actionType === 'HYENA') {
     const hours = minutes / 60;
     // 店にマークされるほど、良い台の前に立つ前に店員が来る
-    const mean = env.hyenaCoinsPerHour * Math.max(0.2, 1 - hallMark / 125) * hours;
+    const mean = env.hyenaCoinsPerHour * hyenaBoost * Math.max(0.2, 1 - hallMark / 125) * hours;
     const sd = HYENA_SD_PER_HOUR * Math.sqrt(hours);
     const diff = Math.round(sampleNormal(mean, sd));
     return topUp({
@@ -103,12 +103,13 @@ export function makeLog(
   session: PlaySession | null,
   trueSetting: number | null,
   memo: string,
+  handCounter = true,
 ): DayLog {
   const env = getEnvironment(date);
   const rate = env.exchangeRate;
   const machine = session?.machineId ? getMachine(session.machineId) : null;
   // 設定狙いは小役カウンター・示唆からの推定でしか期待値を知り得ない。ハイエナは天井・ゾーンの期待値が既知
-  const estimate = machine && session && session.games > 0 ? estimateFromCounters(machine, session.games, session.counts) : null;
+  const estimate = machine && session && session.games > 0 ? estimateFromCounters(machine, session.games, session.counts, handCounter) : null;
   const estCoins = estimate?.expectedCoins ?? session?.expectedCoins ?? 0;
   const estVariance = estimate?.variance ?? session?.coinVariance ?? 0;
   const notable = machine && session ? notableEvents(machine, session.counts) : [];
